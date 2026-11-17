@@ -12,15 +12,45 @@ Claude translator.
 
 ## Start
 
-Double-click **`Manga Cleaner.bat`**. The app opens in your browser.
+Double-click **`Manga Cleaner.bat`**. Manga Cleaner opens in your browser as
+a small website that runs only on this computer.
 
-1. Drop pages onto the window (images, a folder, or a `.zip` / `.cbz`).
-2. Each page is cleaned automatically. A tick appears on its thumbnail.
-3. Open the **Translate** tab and press *Translate this page* (or tick
-   *Translate new pages as they are added*).
-4. Check the result, fix anything you do not like, and download.
+1. **Library.** Drop the raw pages of a chapter anywhere on the page
+   (images, a folder, or a `.zip` / `.cbz`), or press *New chapter*. Each page
+   is cleaned automatically as it arrives.
+2. **Chapter.** Give the chapter its title and series, write a few lines
+   *About this series*, and press *Translate chapter*. The pages are
+   translated in reading order, so each one knows the story so far.
+3. **Editor.** Click any page to check it closely and fix what you do not
+   like (see *Cleaning a page* and *Translating a page* below).
+4. **Read** the finished chapter in the built-in reader, or download it as a
+   `.zip` of English or cleaned pages.
 
 Keep the black console window open while you work; closing it quits the app.
+Everything is saved as you go, so your chapters are still there next time.
+
+## The library
+
+- **Series.** Chapters with the same series name are grouped together and
+  share one set of notes, so names and tone stay the same from chapter to
+  chapter. Each chapter page links to the previous and next chapter.
+- **Chapter page.** Drag pages to put them in order (or select a page and
+  press `Alt` + an arrow key). Add more pages at any time, translate the
+  whole chapter, download it, or delete it.
+- **Reader.** Reads right to left like a printed manga (`D` switches the
+  direction), one page at a time or as one long scroll (`M`). Switch between
+  the English, cleaned and original pages with `V`, and go full screen with
+  `F`. Turn pages with the arrow keys, the space bar, a click on either side
+  of the page, or a swipe. A click or tap in the middle of the page hides the
+  controls. The reader remembers where you stopped.
+- **Where it is kept.** In the `library` folder next to `Manga Cleaner.bat`,
+  one folder per chapter holding the original pages, the cleaned and English
+  versions, and your edits. Back that folder up to keep your work. To keep the
+  library somewhere else, start the app with `--library "D:\Manga\library"`
+  or set the `MANGACLEAN_LIBRARY` environment variable.
+- **Private.** The site listens only on this computer (`127.0.0.1`) and
+  turns away requests that other websites open in your browser try to send
+  it.
 
 ## Cleaning a page
 
@@ -79,15 +109,18 @@ reached, the app says when it resets; the offline translator keeps working
 meanwhile. For more thorough (slower) localisation, set the environment
 variable `MANGACLEAN_CLAUDE_EFFORT=high` before starting the app.
 
-**About this series.** In the Translate tab, tell the translator what it
-cannot see on one page: the setting and tone, who is who, and how names
-should be spelled. For example: "a historical war drama; soldiers talk
-rough, the king speaks formally; spell the hero's name Shin". When working
-without the app, put the same text in a `notes.txt` inside the chapter
-folder, or pass `--notes`.
+**About this series.** On the chapter page (or in the editor's Translate
+tab), tell the translator what it cannot see on one page: the setting and
+tone, who is who, and how names should be spelled. For example: "a
+historical war drama; soldiers talk rough, the king speaks formally; spell
+the hero's name Shin". The notes belong to the series, so every chapter of
+it uses them. When working without the app, put the same text in a
+`notes.txt` inside the chapter folder, or pass `--notes`.
 
-Translate pages in reading order. Each page then knows the story so far,
-and names stay spelled the way they were settled on earlier pages.
+Translate pages in reading order (*Translate chapter* does this for you).
+Each page then knows the story so far, including the end of the previous
+chapter of the series, and names stay spelled the way they were settled on
+earlier pages.
 
 ### How the lettering is chosen
 

@@ -89,7 +89,9 @@ function renderSide(d) {
 /* ----------------------------------------------------------------- pages */
 function pageState(p) {
   if (p.status === 'error') return ['Could not be cleaned', 'bad', p.error || ''];
-  if (p.tstate === 'working') return [p.status === 'working' ? p.stage : 'Waiting to be translated', 'work', ''];
+  if (p.tstate === 'working') {
+    return p.status === 'working' ? [p.stage, 'work', ''] : ['Waiting', 'work', 'Waiting to be translated'];
+  }
   if (p.status === 'queued' || p.status === 'working') return [p.status === 'working' ? p.stage : 'Waiting', 'work', ''];
   if (p.tstate === 'error') return ['Translation failed', 'bad', p.tnote || ''];
   if (p.translated) return ['In English', 'done', ''];

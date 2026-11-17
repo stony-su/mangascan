@@ -6,3 +6,4 @@ cleaned/
 translated/
 __pycache__/
 *.pyc
+library/

@@ -1,5 +1,6 @@
 @echo off
-rem Double-click to open the Manga Cleaner review app in your browser.
+rem Double-click to open Manga Cleaner in your browser. Your chapters are kept
+rem in the "library" folder next to this file (or pass --library "D:\somewhere").
 setlocal
 cd /d "%~dp0"
 title Manga Cleaner

@@ -43,10 +43,15 @@
 .state.done { color: var(--text); }
 .state.work { color: var(--text); }
 .state.bad { color: var(--bad); }
-.tile-x { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; border-radius: 4px; opacity: 0; }
-.tile:hover .tile-x, .tile-x:focus-visible, .tile-x.armed { opacity: 1; }
-.tile-x:hover { color: var(--bad); }
-.tile-x.armed { color: #fff; background: var(--bad); }
+.tile-x {
+  position: absolute; top: 8px; right: 8px; z-index: 1; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); color: var(--text);
+  font-size: 12px; cursor: pointer; opacity: 0; transition: opacity .15s;
+}
+.tile:hover .tile-x, .tile:focus-within .tile-x, .tile-x.armed { opacity: 1; }
+.tile-x:hover { color: var(--bad); border-color: var(--bad); }
+.tile-x.armed { color: #fff; background: var(--bad); border-color: var(--bad); }
+@media (hover: none) { .tile-x { opacity: 1; } }
 .working-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex: none; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
 

@@ -1,0 +1,5 @@
+.venv/
+models/
+cleaned/
+__pycache__/
+*.pyc

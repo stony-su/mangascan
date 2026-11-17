@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manga Cleaner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111315'/%3E%3Cpath d='M6 9c0-2 2-3.500 5-3.500h10c3 0 5 1.500 5 3.500v8c0 2-2 3.500-5 3.500h-5l-6 5v-5c-2.500-.3-4-1.600-4-3.500z' fill='%23f2f3f5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">Manga Cleaner</div>
+  <button class="btn primary" id="addBtn" title="Add image files or .zip / .cbz archives">Add pages</button>
+  <button class="btn" id="addFolderBtn" title="Add every image in a folder">Add folder</button>
+
+  <div class="seg" id="viewSeg" role="group" aria-label="What to show">
+    <button data-view="clean" class="on" title="The cleaned page (1)">Cleaned</button>
+    <button data-view="original" title="The untouched page (2)">Original</button>
+    <button data-view="detected" title="Original with everything that was found highlighted (3)">Detected</button>
+  </div>
+
+  <div class="spacer"></div>
+
+  <label class="field" title="File format for downloads">
+    <span>Save as</span>
+    <select id="fmt">
+      <option value="png">PNG (lossless)</option>
+      <option value="jpg">JPG</option>
+      <option value="webp">WebP (lossless)</option>
+      <option value="same">Same as source</option>
+    </select>
+  </label>
+  <button class="btn" id="dlPage" disabled>Download page</button>
+  <button class="btn" id="dlAll" disabled>Download all (.zip)</button>
+</header>
+
+<main>
+  <aside class="pages" aria-label="Pages">
+    <div class="side-head">
+      <span id="pageCount">No pages</span>
+      <button class="link" id="clearAll" hidden>Remove all</button>
+    </div>
+    <ol id="pageList"></ol>
+  </aside>
+
+  <section class="stage" id="stage">
+    <canvas id="view" tabindex="0" aria-label="Page view"></canvas>
+
+    <div class="empty" id="empty">
+      <div class="drop">
+        <h1>Drop raw pages here</h1>
+        <p>Images, folders, or .zip / .cbz archives. Each page is cleaned automatically:
+           lettering in balloons is wiped, lettering on artwork is redrawn.</p>
+        <div class="row">
+          <button class="btn primary" id="emptyAdd">Choose files</button>
+          <button class="btn" id="emptyFolder">Choose folder</button>
+        </div>
+        <p class="fine">Everything runs on this computer. Nothing is sent anywhere.</p>
+      </div>
+    </div>
+
+    <div class="pill" id="pill" hidden><span class="spin"></span><span id="pillText">Working</span></div>
+    <div class="toast" id="toast" hidden></div>
+    <div class="dropveil" id="dropveil" hidden>Drop to add pages</div>
+  </section>
+
+  <aside class="tools" aria-label="Tools">
+    <h2>Tool</h2>
+    <div class="toolgrid" id="toolSeg">
+      <button data-tool="select" class="on">
+        <b>Pick</b><kbd>V</kbd>
+        <small>Click a region to switch its erasing on or off</small>
+      </button>
+      <button data-tool="erase">
+        <b>Erase</b><kbd>E</kbd>
+        <small>Paint over anything that should also go</small>
+      </button>
+      <button data-tool="keep">
+        <b>Keep</b><kbd>K</kbd>
+        <small>Paint over what must be left untouched</small>
+      </button>
+    </div>
+
+    <div class="brushrow" id="brushRow" hidden>
+      <label for="brush">Brush size</label>
+      <input type="range" id="brush" min="3" max="120" value="18">
+      <output id="brushOut">18 px</output>
+      <label class="check" title="Always redraw the painted area with the AI model instead of deciding automatically">
+        <input type="checkbox" id="forceArt"> Always redraw (never flat-fill)
+      </label>
+    </div>
+
+    <h2>This page</h2>
+    <div class="stack">
+      <button class="btn wide" id="uncertainBtn" hidden></button>
+      <button class="btn wide" id="undoBtn" disabled>Undo <kbd>Ctrl Z</kbd></button>
+      <button class="btn wide" id="resetBtn" disabled>Reset to automatic result</button>
+    </div>
+
+    <h2>Colours in "Detected"</h2>
+    <ul class="legend">
+      <li><i class="sw flat"></i>Wiped with the background colour</li>
+      <li><i class="sw art"></i>Redrawn by the AI model</li>
+      <li><i class="sw off"></i>Found, but left alone (click to erase)</li>
+      <li><i class="sw keep"></i>Protected by you</li>
+    </ul>
+
+    <h2>Keys</h2>
+    <dl class="keys">
+      <dt><kbd>C</kbd> hold</dt><dd>Peek at the original</dd>
+      <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Cleaned / Original / Detected</dd>
+      <dt>Wheel</dt><dd>Zoom</dd>
+      <dt><kbd>Space</kbd> drag</dt><dd>Move the page</dd>
+      <dt><kbd>F</kbd></dt><dd>Fit to window</dd>
+      <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Brush size</dd>
+      <dt><kbd>&larr;</kbd> <kbd>&rarr;</kbd></dt><dd>Previous / next page</dd>
+    </dl>
+  </aside>
+</main>
+
+<footer class="status" id="status"><span id="statusText">Ready</span><span id="zoomText"></span></footer>
+
+<input type="file" id="fileInput" multiple hidden
+       accept="image/*,.zip,.cbz,.avif,.jfif">
+<input type="file" id="dirInput" webkitdirectory hidden>
+<script src="app.js"></script>
+</body>
+</html>

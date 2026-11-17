@@ -3,6 +3,7 @@
     python -m mangaclean                       open the review app in the browser
     python -m mangaclean chapter_12/           clean a whole folder
     python -m mangaclean page.jpg -o out/      clean one page
+    python -m mangaclean chapter_12/ -t        clean, translate and letter in English
 """
 from __future__ import annotations
 
@@ -28,7 +29,24 @@ def build_parser() -> argparse.ArgumentParser:
                     "Run without arguments to open the review app in your browser.")
     p.add_argument("inputs", nargs="*", help="image files, folders, or .zip/.cbz archives")
     p.add_argument("-o", "--output", metavar="DIR",
-                   help="where to write the cleaned pages (default: a 'cleaned' folder next to the input)")
+                   help="where to write the results (default: a 'cleaned' folder next to the input, "
+                        "or 'translated' with --translate)")
+    p.add_argument("-t", "--translate", nargs="?", const="auto",
+                   choices=["auto", "claude-code", "claude", "offline"], metavar="ENGINE",
+                   help="also read the Japanese, translate it to English and letter the page. "
+                        "ENGINE: 'claude-code' localises each page with Claude through your Claude "
+                        "Code login; 'claude' does the same through the Anthropic API (API key); "
+                        "'offline' is a literal rough draft made on this computer. Default 'auto': "
+                        "Claude Code if it is installed, else offline. The Claude engines send each "
+                        "page to Anthropic and use your account")
+    p.add_argument("--notes", metavar="TEXT",
+                   help="with --translate: what the translator should know about the series "
+                        "(setting, who is who, preferred name spellings)")
+    p.add_argument("--notes-file", metavar="FILE",
+                   help="like --notes, read from a text file (a notes.txt inside a folder you "
+                        "translate is used automatically)")
+    p.add_argument("--script", action="store_true",
+                   help="with --translate: also save <name>.txt with the Japanese and English of every block")
     p.add_argument("-f", "--format", choices=["png", "jpg", "webp", "same"], default="png",
                    help="output format (default: png, lossless). 'same' keeps the source format")
     p.add_argument("-r", "--recursive", action="store_true", help="look into sub-folders too")
@@ -48,14 +66,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also save <name>_overlay.png showing what was detected")
     p.add_argument("--skip-existing", action="store_true", help="do not redo pages already in the output folder")
     p.add_argument("--threads", type=int, default=0, metavar="N", help="CPU threads (default: all)")
-    p.add_argument("--ui", action="store_true", help="open the review app (default when no input is given)")
-    p.add_argument("--port", type=int, default=8765, help="port for the review app")
+    p.add_argument("--ui", action="store_true", help="open the website (default when no input is given)")
+    p.add_argument("--port", type=int, default=8765, help="port for the website")
     p.add_argument("--no-browser", action="store_true", help="with --ui: do not open a browser window")
+    p.add_argument("--library", metavar="DIR",
+                   help="with --ui: where the website keeps your chapters (default: the 'library' "
+                        "folder next to the program)")
     p.add_argument("--version", action="version", version=f"mangaclean {__version__}")
     return p
 
 
-def _expand(inputs: List[str], recursive: bool, output: Optional[Path]):
+def _expand(inputs: List[str], recursive: bool, output: Optional[Path], folder: str = "cleaned"):
     """Yield jobs: (label, loader, destination path without extension)."""
     for raw in inputs:
         matches = [Path(m) for m in glob.glob(raw)] if any(c in raw for c in "*?[") else [Path(raw)]
@@ -63,20 +84,33 @@ def _expand(inputs: List[str], recursive: bool, output: Optional[Path]):
             print(f"! nothing matches {raw}", file=sys.stderr)
         for path in matches:
             if path.is_dir():
-                out_dir = output or (path / "cleaned")
-                for img in list_images(path, recursive, skip=out_dir):
+                out_dir = output or (path / folder)
+                skip_dirs = [out_dir, path / "cleaned", path / "translated"]
+                for img in [i for i in list_images(path, recursive, skip=out_dir)
+                            if not any(d.resolve() in i.resolve().parents for d in skip_dirs)]:
                     rel = img.relative_to(path)
                     yield str(rel), (lambda p=img: load_image(p)), out_dir / rel.with_suffix("")
             elif path.suffix.lower() in ARCHIVE_EXTS and path.is_file():
-                out_dir = (output or (path.parent / "cleaned")) / path.stem
+                out_dir = (output or (path.parent / folder)) / path.stem
                 for name, data in iter_archive(path):
                     yield f"{path.name}:{name}", (lambda d=data: load_image_bytes(d)), \
                         out_dir / Path(name).with_suffix("")
             elif path.is_file() and is_image(path):
-                out_dir = output or (path.parent / "cleaned")
+                out_dir = output or (path.parent / folder)
                 yield path.name, (lambda p=path: load_image(p)), out_dir / path.stem
             else:
                 print(f"! skipping {path} (not an image, folder or archive)", file=sys.stderr)
+
+
+def _write_script(path: Path, label: str, blocks) -> None:
+    """Plain-text script of a page: what was read and how it was translated."""
+    lines = [f"# {label}", ""]
+    for b in blocks:
+        state = "" if b.translation.strip() else "   (not lettered: could not be read)"
+        lines += [f"[{b.id}]  OCR confidence {b.confidence:.2f}{state}",
+                  f"JP: {b.text}", f"EN: {b.translation}", ""]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -84,13 +118,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.ui or not args.inputs:
         from .server import serve
         return serve(port=args.port, open_browser=not args.no_browser, threads=args.threads,
-                     quality=args.quality)
+                     quality=args.quality, library=Path(args.library) if args.library else None)
 
     from .pipeline import Cleaner, overlay
     from .textmask import MaskSettings
 
     output = Path(args.output) if args.output else None
-    jobs = list(_expand(args.inputs, args.recursive, output))
+    jobs = list(_expand(args.inputs, args.recursive, output, "translated" if args.translate else "cleaned"))
     if not jobs:
         print("No images found.", file=sys.stderr)
         return 1
@@ -98,6 +132,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     cleaner = Cleaner(threads=args.threads, quality=args.quality,
                       settings=MaskSettings(grow=args.grow), inpaint=not args.no_inpaint,
                       log=lambda s: print(s, flush=True))
+    context = None
+    if args.translate:
+        from .translate import PageContext, best_engine, engine_problems
+        if args.translate == "auto":
+            args.translate = best_engine()
+        problem = engine_problems().get(args.translate)
+        if problem:
+            print(f"Cannot use the '{args.translate}' translator: {problem}.", file=sys.stderr)
+            return 2
+        notes = args.notes or ""
+        if args.notes_file:
+            notes = (notes + "\n" + Path(args.notes_file).read_text(encoding="utf-8")).strip()
+        if not notes:                                   # a notes.txt in a chapter folder
+            for raw in args.inputs:
+                cand = Path(raw) / "notes.txt"
+                if Path(raw).is_dir() and cand.is_file():
+                    notes = cand.read_text(encoding="utf-8").strip()
+                    print(f"Using the series notes in {cand}", flush=True)
+                    break
+        context = PageContext(notes=notes)
+        print({"claude-code": "Translating with Claude through your Claude Code login: each page (image "
+                              "and text) is sent to Anthropic and counts toward your Claude usage.",
+               "claude": "Translating with the Claude API: each page (image and text) is sent to "
+                         "Anthropic and billed to your API account.",
+               "offline": "Translating on this computer (a literal rough draft)."}[args.translate],
+              flush=True)
     failed = 0
     started = time.perf_counter()
     width = len(str(len(jobs)))
@@ -114,7 +174,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for r in page.regions:
                     r.enabled = True
             clean = cleaner.render(page)
-            saved = save_image(dest, clean, meta, args.format)
+            result, lettered = clean, None
+            if args.translate:
+                cleaner.translate(page, args.translate, context=context)
+                context.remember(label, page.scene,
+                                 [{"japanese": b.text, "english": b.translation}
+                                  for b in page.blocks if b.translation.strip()], page.names)
+                result = cleaner.typeset(page, clean)
+                lettered = sum(1 for b in page.blocks if b.layout)
+                if args.script:
+                    _write_script(dest.parent / (dest.name + ".txt"), label, page.blocks)
+            saved = save_image(dest, result, meta, args.format)
             if args.mask:
                 flat, art = page.masks()
                 Image.fromarray(((flat | art) * 255).astype(np.uint8), "L").save(
@@ -126,6 +196,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             note = f"{on} text region{'s' if on != 1 else ''} erased"
             if off:
                 note += f", {off} uncertain left alone"
+            if lettered is not None:
+                unread = sum(1 for b in page.blocks if not b.translation.strip())
+                note += f"; {lettered} block{'s' if lettered != 1 else ''} lettered in English"
+                if unread:
+                    note += f", {unread} could not be read"
             print(f"{prefix}  {note}  {time.perf_counter() - t:.1f}s  -> {saved}")
         except Exception as exc:                      # keep going with the other pages
             failed += 1

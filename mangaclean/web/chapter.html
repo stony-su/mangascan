@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chapter - Manga Cleaner</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="/chapter.css">
+</head>
+<body>
+
+<header class="site-bar">
+  <a class="brand" href="/"><span class="mark" aria-hidden="true">M</span><span class="brand-name">Manga Cleaner</span></a>
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a href="/">Library</a>
+    <span class="sep" aria-hidden="true">/</span>
+    <span id="crumbSeries" hidden></span>
+    <span class="sep" id="crumbSep" aria-hidden="true" hidden>/</span>
+    <span id="crumbTitle" aria-current="page"></span>
+  </nav>
+  <div class="spacer"></div>
+  <a class="btn ghost" id="editBtn" href="#">Open editor</a>
+  <a class="btn" id="readBtn" href="#">Read</a>
+</header>
+
+<main class="wrap" id="main" hidden>
+  <section class="chapter-head">
+    <label class="sr-only" for="title">Chapter title</label>
+    <input class="title-input" id="title" maxlength="200" autocomplete="off" spellcheck="false">
+    <div class="head-row">
+      <label class="series-field" for="series"><span>Series</span>
+        <input class="input" id="series" maxlength="200" list="seriesList" placeholder="No series" autocomplete="off">
+      </label>
+      <datalist id="seriesList"></datalist>
+      <p class="muted" id="summary"></p>
+    </div>
+    <nav class="sibling-nav" id="siblingNav" aria-label="Other chapters" hidden>
+      <a class="link" id="prevLink" href="#" hidden>Previous chapter</a>
+      <a class="link" id="nextLink" href="#" hidden>Next chapter</a>
+    </nav>
+  </section>
+
+  <div class="chapter-body">
+    <section class="pages-area" aria-labelledby="pagesHead">
+      <div class="area-head">
+        <div>
+          <h2 id="pagesHead">Pages</h2>
+          <p class="muted">Drag to reorder (or Alt + arrow keys). Click a page to fix it in the editor.</p>
+        </div>
+        <button class="btn" id="addBtn" type="button">Add pages</button>
+      </div>
+      <ol class="page-grid" id="grid"></ol>
+      <div class="drop-target empty-pages" id="emptyPages" hidden>
+        <h3>No pages yet</h3>
+        <p class="muted">Drop images, a folder or a .zip anywhere on this page, or choose them.</p>
+        <div class="row">
+          <button class="btn primary" id="emptyFiles" type="button">Choose files</button>
+          <button class="btn" id="emptyFolder" type="button">Choose folder</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="side-block" aria-labelledby="trHead">
+        <h2 id="trHead">Translate</h2>
+        <label class="label" for="engine">Translator</label>
+        <select class="input" id="engine"></select>
+        <p class="help" id="engineNote"></p>
+        <button class="btn primary block" id="translateBtn" type="button">Translate chapter</button>
+        <label class="check"><input type="checkbox" id="redo"> Also redo pages already in English</label>
+        <p class="note" id="translateNote" role="status"></p>
+      </section>
+
+      <section class="side-block" aria-labelledby="notesHead">
+        <h2 id="notesHead">About this series</h2>
+        <label class="sr-only" for="notes">Notes for the translator</label>
+        <textarea class="textarea" id="notes" rows="5" spellcheck="true"
+          placeholder="Setting, tone, who is who, how names are spelled. E.g. a historical war drama; soldiers talk rough, the king speaks formally."></textarea>
+        <p class="help" id="notesHelp"></p>
+      </section>
+
+      <section class="side-block" aria-labelledby="dlHead">
+        <h2 id="dlHead">Download</h2>
+        <label class="label" for="fmt">Format</label>
+        <select class="input" id="fmt">
+          <option value="png">PNG (lossless)</option>
+          <option value="jpg">JPG</option>
+          <option value="webp">WebP (lossless)</option>
+          <option value="same">Same as the originals</option>
+        </select>
+        <div class="dl-row">
+          <a class="btn" id="dlEnglish" href="#">English pages</a>
+          <a class="btn" id="dlClean" href="#">Cleaned pages</a>
+        </div>
+      </section>
+
+      <section class="side-block">
+        <button class="btn danger block" id="deleteBtn" type="button">Delete chapter</button>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<div class="wrap missing" id="missing" hidden>
+  <h1>This chapter no longer exists</h1>
+  <p class="muted">It may have been deleted in another window.</p>
+  <a class="btn primary" href="/">Back to the library</a>
+</div>
+
+<div class="taskbar" id="taskbar" hidden><span class="spin"></span><span id="taskText"></span></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<div class="dropveil" id="dropveil" hidden>Drop to add pages to this chapter</div>
+<input type="file" id="fileInput" multiple hidden accept="image/*,.zip,.cbz,.avif,.jfif">
+<input type="file" id="dirInput" webkitdirectory hidden>
+<script src="/site.js"></script>
+<script src="/chapter.js"></script>
+</body>
+</html>

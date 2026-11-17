@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library - Manga Cleaner</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="/home.css">
+</head>
+<body>
+
+<header class="site-bar">
+  <a class="brand" href="/"><span class="mark" aria-hidden="true">M</span>Manga Cleaner</a>
+  <div class="spacer"></div>
+  <button class="btn primary" id="newBtn" type="button">New chapter</button>
+</header>
+
+<main class="wrap">
+  <section class="new-panel" id="newPanel" hidden aria-labelledby="newHead">
+    <h2 id="newHead">New chapter</h2>
+    <form class="new-form" id="newForm" autocomplete="off">
+      <div>
+        <label class="label" for="newTitle">Chapter title</label>
+        <input class="input" id="newTitle" maxlength="200" required placeholder="Chapter 12">
+      </div>
+      <div>
+        <label class="label" for="newSeries">Series</label>
+        <input class="input" id="newSeries" maxlength="200" list="seriesOptions" placeholder="Optional">
+        <datalist id="seriesOptions"></datalist>
+      </div>
+      <div class="form-actions">
+        <button class="btn primary" type="submit">Create chapter</button>
+        <button class="btn ghost" type="button" id="newCancel">Cancel</button>
+      </div>
+    </form>
+    <p class="help">Chapters of the same series share their notes and name spellings, so the translation stays consistent.</p>
+  </section>
+
+  <div class="offline" id="offline" hidden>
+    <p>Lost contact with the app. Is its window still open?</p>
+    <button class="btn" type="button" id="retry">Try again</button>
+  </div>
+
+  <div class="loading-grid" id="loading" aria-hidden="true">
+    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+  </div>
+
+  <section class="start" id="empty" hidden>
+    <div class="start-copy">
+      <h1>Start with a chapter of raw pages</h1>
+      <p>Drop images, a folder or a .zip anywhere on this page. Pages are cleaned as they arrive.</p>
+      <div class="start-actions">
+        <button class="btn primary" type="button" id="pickFiles">Choose files</button>
+        <button class="btn" type="button" id="pickFolder">Choose folder</button>
+      </div>
+    </div>
+    <dl class="start-flow">
+      <div><dt>Clean</dt><dd>The Japanese lettering is removed and the art behind it repaired.</dd></div>
+      <div><dt>Translate</dt><dd>Claude localises each page with the scene and the story so far, then letters it.</dd></div>
+      <div><dt>Read</dt><dd>Read the finished chapter here, or download it as a .zip.</dd></div>
+    </dl>
+  </section>
+
+  <section id="library" hidden>
+    <div class="lib-head">
+      <h1>Library</h1>
+      <p class="muted" id="libCount"></p>
+    </div>
+    <div id="groups"></div>
+  </section>
+</main>
+
+<div class="taskbar" id="taskbar" hidden><span class="spin"></span><span id="taskText"></span></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<div class="dropveil" id="dropveil" hidden>Drop to start a new chapter</div>
+<input type="file" id="fileInput" multiple hidden accept="image/*,.zip,.cbz,.avif,.jfif">
+<input type="file" id="dirInput" webkitdirectory hidden>
+<script src="/site.js"></script>
+<script src="/home.js"></script>
+</body>
+</html>

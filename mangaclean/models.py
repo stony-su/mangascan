@@ -7,7 +7,7 @@ SHA-256.  Licences:
 * LaMa fine-tuned on anime/manga (AnimeMangaInpainting), ONNX by ogkalu  Apache-2.0
 * manga-ocr (kha-white), 2025 retrain by jzhang533, ONNX by l0wgear  Apache-2.0
 * FuguMT ja-en (staka), ONNX export by Kadonox                       CC BY-SA 4.0
-* Comic Neue, Bangers, Anton, Crimson Text, Patrick Hand (Google Fonts)  SIL OFL 1.1
+* Balsamiq Sans, Bangers, Anton, Patrick Hand (Google Fonts)          SIL OFL 1.1
 """
 from __future__ import annotations
 
@@ -64,6 +64,12 @@ GROUPS: Dict[str, list] = {
 
 # Default lettering fonts (all SIL Open Font Licence).  file -> path in google/fonts
 FONTS: Dict[str, dict] = {
+    "BalsamiqSans-Bold.ttf": _f(
+        "BalsamiqSans-Bold.ttf", GF.format(path="ofl/balsamiqsans/BalsamiqSans-Bold.ttf"),
+        "a3302bd8424e6a37704eb5e20d5c5a3a2fd80feaf57e48a19d261f8e0c583621", 369860),
+    "BalsamiqSans-BoldItalic.ttf": _f(
+        "BalsamiqSans-BoldItalic.ttf", GF.format(path="ofl/balsamiqsans/BalsamiqSans-BoldItalic.ttf"),
+        "4999588a66defbf39e718b3edb0b965b932157bd8d1321130de06bec0cdccc75", 351304),
     "ComicNeue-Bold.ttf": _f("ComicNeue-Bold.ttf", GF.format(path="ofl/comicneue/ComicNeue-Bold.ttf"),
         "3e7e5fccfd7e0788f317b43312151c1bd5cf058c9697a8d83eac3939050bd61e", 55716),
     "ComicNeue-BoldItalic.ttf": _f("ComicNeue-BoldItalic.ttf", GF.format(path="ofl/comicneue/ComicNeue-BoldItalic.ttf"),

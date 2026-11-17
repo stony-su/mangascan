@@ -1,5 +1,8 @@
 .venv/
 models/
+fonts/*.ttf
+fonts/*.otf
 cleaned/
+translated/
 __pycache__/
 *.pyc

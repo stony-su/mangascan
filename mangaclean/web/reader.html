@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader - Manga Cleaner</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="/reader.css">
+</head>
+<body class="reader">
+
+<header class="reader-bar" id="bar">
+  <a class="btn ghost" id="back" href="/">Back<span class="wide-only"> to chapter</span></a>
+  <div class="rtitle">
+    <span class="muted" id="rSeries"></span>
+    <span id="rTitle"></span>
+  </div>
+  <div class="spacer"></div>
+  <div class="seg" id="versionSeg" role="group" aria-label="Version">
+    <button type="button" data-v="english">English</button>
+    <button type="button" data-v="clean">Cleaned</button>
+    <button type="button" data-v="original">Original</button>
+  </div>
+  <div class="seg" id="modeSeg" role="group" aria-label="Layout">
+    <button type="button" data-m="page">Pages</button>
+    <button type="button" data-m="strip">Scroll</button>
+  </div>
+  <button class="btn" id="dirBtn" type="button" title="Reading direction (D)"></button>
+</header>
+
+<main class="rstage" id="stage">
+  <div class="page-view" id="pageView">
+    <img id="pageImg" alt="">
+    <button class="zone left" id="zoneLeft" type="button"></button>
+    <button class="zone right" id="zoneRight" type="button"></button>
+    <button class="zone mid" id="zoneMid" type="button" aria-label="Show or hide the controls" title="Show or hide the controls"></button>
+  </div>
+  <div class="strip" id="strip" hidden></div>
+  <section class="end" id="endCard" hidden>
+    <h2 id="endTitle"></h2>
+    <p class="muted" id="endText"></p>
+    <div class="end-actions">
+      <a class="btn primary" id="nextChapter" href="#" hidden>Next chapter</a>
+      <a class="btn" id="endBack" href="/">Back to chapter</a>
+      <button class="btn ghost" id="again" type="button">Read again</button>
+    </div>
+  </section>
+  <div class="rempty" id="rempty" hidden>
+    <h2>Nothing to read yet</h2>
+    <p class="muted">This chapter has no cleaned pages yet.</p>
+    <a class="btn primary" id="emptyBack" href="/">Back to chapter</a>
+  </div>
+</main>
+
+<footer class="reader-foot" id="foot">
+  <span class="counter" id="counter"></span>
+  <input type="range" id="slider" min="1" max="1" value="1" aria-label="Go to page">
+  <span class="pnote" id="pageNote"></span>
+</footer>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="/site.js"></script>
+<script src="/reader.js"></script>
+</body>
+</html>

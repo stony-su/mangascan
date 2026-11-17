@@ -3,28 +3,33 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Manga Cleaner</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111315'/%3E%3Cpath d='M6 9c0-2 2-3.500 5-3.500h10c3 0 5 1.500 5 3.500v8c0 2-2 3.500-5 3.500h-5l-6 5v-5c-2.500-.3-4-1.600-4-3.500z' fill='%23f2f3f5'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css">
+<title>Editor - Manga Cleaner</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
 <header class="bar">
-  <div class="brand">Manga Cleaner</div>
-  <button class="btn primary" id="addBtn" title="Add image files or .zip / .cbz archives">Add pages</button>
-  <button class="btn" id="addFolderBtn" title="Add every image in a folder">Add folder</button>
+  <a class="brand" href="/" title="Library"><span class="mark" aria-hidden="true">M</span></a>
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a href="/">Library</a>
+    <span class="sep" aria-hidden="true">/</span>
+    <a id="crumbChapter" href="#">Chapter</a>
+  </nav>
 
   <div class="seg" id="viewSeg" role="group" aria-label="What to show">
     <button data-view="clean" class="on" title="The cleaned page (1)">Cleaned</button>
     <button data-view="original" title="The untouched page (2)">Original</button>
     <button data-view="detected" title="Original with everything that was found highlighted (3)">Detected</button>
+    <button data-view="english" title="The page lettered in English (4)">English</button>
   </div>
 
   <div class="spacer"></div>
 
+  <button class="btn" id="addBtn" title="Add image files or .zip / .cbz archives to this chapter">Add pages</button>
   <label class="field" title="File format for downloads">
-    <span>Save as</span>
-    <select id="fmt">
+    <select id="fmt" aria-label="Download format">
       <option value="png">PNG (lossless)</option>
       <option value="jpg">JPG</option>
       <option value="webp">WebP (lossless)</option>
@@ -32,7 +37,8 @@
     </select>
   </label>
   <button class="btn" id="dlPage" disabled>Download page</button>
-  <button class="btn" id="dlAll" disabled>Download all (.zip)</button>
+  <button class="btn" id="dlAll" disabled>Download chapter</button>
+  <a class="btn" id="readLink" href="#">Read</a>
 </header>
 
 <main>
@@ -66,6 +72,41 @@
   </section>
 
   <aside class="tools" aria-label="Tools">
+    <div class="tabs" id="tabs" role="tablist">
+      <button data-tab="clean" class="on" role="tab">Clean</button>
+      <button data-tab="translate" role="tab">Translate</button>
+    </div>
+
+    <div id="tabTranslate" hidden>
+      <h2>Translate to English</h2>
+      <div class="stack">
+        <label class="field col">
+          <span>Translator</span>
+          <select id="engine">
+            <option value="claude-code">Claude (your Claude Code login)</option>
+            <option value="claude">Claude (Anthropic API key)</option>
+            <option value="offline">On this computer (rough draft)</option>
+          </select>
+        </label>
+        <p class="note" id="engineNote"></p>
+        <label class="field col">
+          <span>About this series <small>(optional, used by Claude)</small></span>
+          <textarea id="notes" rows="3" spellcheck="true"
+            placeholder="Setting, tone, who is who, name spellings. E.g. a historical war drama; soldiers talk rough, the king speaks formally."></textarea>
+        </label>
+        <button class="btn primary wide" id="translateBtn" disabled>Translate this page</button>
+        <label class="check"><input type="checkbox" id="autoTranslate"> Translate new pages as they are added</label>
+        <p class="note bad" id="tnote" hidden></p>
+        <p class="note" id="sceneNote" hidden></p>
+      </div>
+
+      <h2 id="blockHead" hidden>Text on this page</h2>
+      <p class="note" id="blockHint" hidden>Fix a line and press <kbd>Ctrl</kbd> <kbd>Enter</kbd> (or click away) to re-letter it.
+        Lines the reader could not make out are left blank for you to fill in.</p>
+      <ol id="blockList"></ol>
+    </div>
+
+    <div id="tabClean">
     <h2>Tool</h2>
     <div class="toolgrid" id="toolSeg">
       <button data-tool="select" class="on">
@@ -109,13 +150,14 @@
     <h2>Keys</h2>
     <dl class="keys">
       <dt><kbd>C</kbd> hold</dt><dd>Peek at the original</dd>
-      <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Cleaned / Original / Detected</dd>
+      <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></dt><dd>Cleaned / Original / Detected / English</dd>
       <dt>Wheel</dt><dd>Zoom</dd>
       <dt><kbd>Space</kbd> drag</dt><dd>Move the page</dd>
       <dt><kbd>F</kbd></dt><dd>Fit to window</dd>
       <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Brush size</dd>
       <dt><kbd>&larr;</kbd> <kbd>&rarr;</kbd></dt><dd>Previous / next page</dd>
     </dl>
+    </div>
   </aside>
 </main>
 
@@ -124,6 +166,6 @@
 <input type="file" id="fileInput" multiple hidden
        accept="image/*,.zip,.cbz,.avif,.jfif">
 <input type="file" id="dirInput" webkitdirectory hidden>
-<script src="app.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

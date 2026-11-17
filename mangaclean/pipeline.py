@@ -38,6 +38,9 @@ class Page:
     blocks: List[TextBlock] = field(default_factory=list)   # units of text to read and translate
     protect: Optional[np.ndarray] = None    # bool HxW: pixels the user wants left alone
     timings: Dict[str, float] = field(default_factory=dict)
+    scene: str = ""                         # what happens on the page (from the translator)
+    names: list = field(default_factory=list)   # names/terms and their English spelling
+    usage: Optional[dict] = None            # tokens / cost of the last translation
 
     @property
     def size(self):
@@ -111,6 +114,9 @@ class Cleaner:
             if engine == "claude":
                 from .translate import ClaudeTranslator
                 self._translators[engine] = ClaudeTranslator()
+            elif engine == "claude-code":
+                from .translate import ClaudeCodeTranslator
+                self._translators[engine] = ClaudeCodeTranslator()
             elif engine == "offline":
                 from .translate import OfflineTranslator
                 self._translators[engine] = OfflineTranslator(
@@ -220,18 +226,29 @@ class Cleaner:
         page.timings["ocr"] = time.perf_counter() - t
 
     def translate(self, page: Page, engine: str = "offline",
-                  progress: Optional[Callable[[int, int], None]] = None) -> None:
-        """Read the page's text blocks and translate them (hand-edited blocks are kept)."""
+                  progress: Optional[Callable[[int, int], None]] = None, context=None) -> None:
+        """Read the page's text blocks and translate them.
+
+        Hand-edited blocks are kept as they are, but still shown to the
+        translator so the lines around them fit.  ``context`` (a
+        :class:`~mangaclean.translate.PageContext`) carries series notes,
+        settled names and the story so far from page to page.
+        """
         self.read(page)
         t = time.perf_counter()
-        todo = [b for b in page.blocks if not b.edited]
         items = [{"id": b.id, "text": b.text, "confidence": b.confidence, "box": b.box,
-                  "vertical": b.vertical} for b in todo]
-        results = {r["id"]: r for r in self.translator(engine).translate_page(items, page.rgb, progress)}
-        for b in todo:
+                  "vertical": b.vertical, "keep": b.edited, "english": b.translation}
+                 for b in page.blocks]
+        tr = self.translator(engine)
+        results = {r["id"]: r for r in tr.translate_page(items, page.rgb, progress, context)}
+        for b in page.blocks:
             r = results.get(b.id)
-            if r is not None:
+            if r is not None and not b.edited:
                 b.text, b.translation = r["text"], r["translation"]
+        info = getattr(tr, "last_page", None) or {}
+        page.scene = str(info.get("scene", ""))
+        page.names = list(info.get("names", []))
+        page.usage = getattr(tr, "last_usage", None)
         page.timings["translate"] = time.perf_counter() - t
 
     def typeset(self, page: Page, clean_rgb: np.ndarray) -> np.ndarray:

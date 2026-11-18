@@ -70,6 +70,23 @@
 .side-block select.input { width: 100%; }
 .dl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
 
+.font-current {
+  display: grid; gap: 8px; width: 100%; padding: 10px 12px 12px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel-2); color: var(--text);
+  transition: border-color .15s;
+}
+.font-current:hover { border-color: var(--muted); }
+.font-current-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.font-current-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-weight: 600; }
+#fontName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.font-auto { flex: none; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; font-weight: 500; color: var(--muted); }
+.font-current-change { flex: none; font-size: 12.5px; color: var(--muted); }
+.font-current:hover .font-current-change { color: var(--text); text-decoration: underline; }
+.font-roles { display: grid; gap: 2px; margin-top: 10px; }
+.font-roles .link { display: flex; gap: 6px; padding: 2px 0; font-size: 12.5px; text-align: left; min-width: 0; }
+.font-roles .link b { font-weight: 600; color: var(--text); flex: none; }
+.font-roles .link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .missing { text-align: left; padding-top: 80px; }
 .missing h1 { margin: 0 0 8px; }
 .missing p { margin: 0 0 22px; }

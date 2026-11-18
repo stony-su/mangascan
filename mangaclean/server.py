@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import io
+import itertools
 import json
 import mimetypes
 import os
@@ -45,7 +46,11 @@ from .pipeline import Cleaner, Page
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_UPLOAD = 300 * 1024 * 1024
+MAX_FONT = 50 * 1024 * 1024
 MAX_UNDO = 30
+# which job goes first: edits someone is waiting for, then cleaning new pages,
+# then a single page's translation, then whole chapters (translate, re-letter)
+PRIORITY = {"warmup": 0, "render": 0, "typeset": 0, "analyze": 1, "translate": 1}
 THUMB = (360, 510)
 KEEP_LOADED = 40                    # page states held in memory at once
 IDLE_BEFORE_UNLOAD = 120.0          # ...and only pages untouched this long are freed
@@ -106,6 +111,7 @@ class PageState:
         self.counts: dict = {}                # erased / skipped / blocks / lettered, for listings
         self.script: list = []                # the page's lines, for the next page's translator
         self.history: List[bytes] = []        # undo snapshots (this session only)
+        self.job = ""                         # the last job queued for it (this session only)
         self.dirty = False                    # changed in memory, not saved yet
         self._regions = None
         self._blocks = None
@@ -269,7 +275,7 @@ class PageState:
         return {
             "id": self.id, "chapter": self.chapter, "name": self.name,
             "width": self.width, "height": self.height,
-            "status": self.status, "stage": self.stage, "error": self.error,
+            "status": self.status, "stage": self.stage, "error": self.error, "job": self.job,
             "version": self.version, "seconds": round(self.seconds, 1),
             "erased": counts.get("erased", 0), "skipped": counts.get("skipped", 0),
             "canUndo": bool(self.history),
@@ -291,6 +297,8 @@ class PageState:
             "role": (b.layout or {}).get("role") or b.style.get("role_override") or "",
             "roleLocked": bool(b.style.get("role_override")),
             "scale": float(b.style.get("scale", 1.0)),
+            "font": b.style.get("font", ""),                 # picked for this line only
+            "fontName": (b.layout or {}).get("fontName", ""),  # what it is lettered in
             "size": (b.layout or {}).get("size"),
             "lettered": b.layout is not None,
             "overflow": bool((b.layout or {}).get("overflow")),
@@ -303,19 +311,20 @@ class PageState:
 class Chapter:
     def __init__(self, cid: str, folder: Path, title: str = "", series: str = "", notes: str = "",
                  created: Optional[float] = None, updated: Optional[float] = None,
-                 pages: Optional[List[str]] = None):
+                 pages: Optional[List[str]] = None, fonts: Optional[dict] = None):
         self.id = cid
         self.folder = folder
         self.title = title
         self.series = series
         self.notes = notes                     # used when the chapter belongs to no series
+        self.fonts: dict = dict(fonts or {})   # style -> font id; likewise
         self.created = created or time.time()
         self.updated = updated or self.created
         self.pages: List[str] = list(pages or [])
 
     def to_json(self) -> dict:
         return {"id": self.id, "title": self.title, "series": self.series, "notes": self.notes,
-                "created": self.created, "updated": self.updated, "pages": self.pages}
+                "fonts": self.fonts, "created": self.created, "updated": self.updated, "pages": self.pages}
 
     def save(self) -> None:
         _write(self.folder / "chapter.json", json.dumps(self.to_json(), ensure_ascii=False, indent=1).encode("utf-8"))
@@ -357,8 +366,9 @@ class Library:
                 continue
             try:
                 info = json.loads(info_file.read_text(encoding="utf-8"))
+                fonts = info.get("fonts") if isinstance(info.get("fonts"), dict) else {}
                 ch = Chapter(folder.name, folder, info.get("title", ""), info.get("series", ""),
-                             info.get("notes", ""), info.get("created"), info.get("updated"))
+                             info.get("notes", ""), info.get("created"), info.get("updated"), fonts=fonts)
             except (ValueError, OSError) as exc:
                 self.log(f"Skipping the chapter in {folder.name}: {exc}")
                 continue
@@ -422,14 +432,16 @@ class Library:
         if series is not None:
             old, new = ch.series, series.strip()[:200]
             if new != old:
-                old_notes = self.notes_for(ch)
+                old_notes, old_fonts = self.notes_for(ch), self.fonts_for(ch)
                 ch.series = new
                 if new and new not in self.series:
                     self.series[new] = {"notes": ""}
                 still_used = any(c.series == old for c in self.chapters.values() if c is not ch)
-                # renaming a series (its only chapter moved): the notes go with it
+                # renaming a series (its only chapter moved): the notes and fonts go with it
                 if old_notes and not self.notes_for(ch):
                     self.set_notes(ch, old_notes)
+                if old_fonts and not self.fonts_for(ch):
+                    self.set_fonts(ch, old_fonts)
                 if old and not still_used:
                     self.series.pop(old, None)
                 self.save_index()
@@ -442,7 +454,8 @@ class Library:
                 self.pages.pop(pid, None)
                 self._in_memory.pop(pid, None)
         if ch.series and not any(c.series == ch.series for c in self.chapters.values()) \
-                and not self.series.get(ch.series, {}).get("notes"):
+                and not self.series.get(ch.series, {}).get("notes") \
+                and not self.series.get(ch.series, {}).get("fonts"):
             self.series.pop(ch.series, None)
             self.save_index()
         shutil.rmtree(ch.folder, ignore_errors=True)
@@ -466,6 +479,33 @@ class Library:
         else:
             ch.notes = text
             ch.save()
+
+    def fonts_for(self, ch: Chapter) -> dict:
+        """The fonts picked for a chapter (style -> font id); like the notes,
+        they belong to its series."""
+        if ch.series:
+            return dict(self.series.get(ch.series, {}).get("fonts") or {})
+        return dict(ch.fonts or {})
+
+    def set_fonts(self, ch: Chapter, changes: dict) -> dict:
+        """Pick fonts (style -> font id, or None to go back to automatic)."""
+        fonts = self.fonts_for(ch)
+        for role, fid in changes.items():
+            if fid:
+                fonts[role] = fid
+            else:
+                fonts.pop(role, None)
+        if ch.series:
+            entry = self.series.setdefault(ch.series, {"notes": ""})
+            if fonts:
+                entry["fonts"] = fonts
+            else:
+                entry.pop("fonts", None)
+            self.save_index()
+        else:
+            ch.fonts = fonts
+            ch.save()
+        return fonts
 
     def series_chapters(self, ch: Chapter) -> List[Chapter]:
         if not ch.series:
@@ -517,17 +557,26 @@ class Library:
 class App:
     def __init__(self, threads: int = 0, quality: str = "normal", library: Optional[Path] = None):
         from .translate import best_engine, engine_problems
+        from .typeset import FontBook
         self.cleaner = Cleaner(threads=threads, quality=quality, log=self._log)
         self.lock = threading.RLock()
-        self.jobs: "queue.Queue" = queue.Queue()
+        self.jobs: "queue.PriorityQueue" = queue.PriorityQueue()
+        self._seq = itertools.count()                  # first come, first served within a priority
+        self._reletter: set = set()                    # pages waiting to be lettered again
         self._decoded: "OrderedDict[str, tuple]" = OrderedDict()   # small LRU of decoded pages
         self.model_note = ""
+        # the website's own view of the fonts (names, previews); the lettering
+        # itself happens in the worker with the typesetter's book
+        catalog = self.cleaner.typesetter.book.catalog
+        self.fontbook = FontBook(log=lambda s: print(s, flush=True), catalog=catalog)
+        self._preview_lock = threading.Lock()
+        threading.Thread(target=catalog.entries, daemon=True, name="fonts").start()
         self.lib = Library(library or default_library_dir(), self._log)
         saved = self.lib.settings.get("engine")
         self.engine = saved if saved and engine_problems().get(saved, "x") is None else best_engine()
         self.auto_translate = bool(self.lib.settings.get("autoTranslate", False))
         threading.Thread(target=self._worker, daemon=True, name="cleaner").start()
-        self.jobs.put(("warmup", None, None, None))
+        self.jobs.put((0, next(self._seq), "warmup", None, None, None))
         self._resume()
 
     @property
@@ -581,13 +630,16 @@ class App:
 
     def _worker(self) -> None:
         while True:
-            kind, ps, done, arg = self.jobs.get()
+            _, _, kind, ps, done, arg = self.jobs.get()
             try:
                 if kind == "warmup":
                     _ = self.cleaner.detector
                     _ = self.cleaner.inpainter
                     self.model_note = ""
                 elif ps.id in self.lib.pages:
+                    if arg == "reletter":
+                        with self.lock:              # a font change from now on queues it again
+                            self._reletter.discard(ps.id)
                     self._run(kind, ps, arg)
             except Exception as exc:                          # noqa: BLE001
                 if ps is not None and ps.id not in self.lib.pages:
@@ -609,7 +661,7 @@ class App:
         analyze    find the text, erase it (and translate, if that is switched on)
         render     erase again after the regions changed
         translate  read, translate and letter the page
-        typeset    letter again after a translation or style was edited
+        typeset    letter again after a translation, style or font was changed
         """
         t0 = time.perf_counter()
         with self.lock:
@@ -624,12 +676,14 @@ class App:
                 ps.regions, ps.blocks, ps.gray = page.regions, page.blocks, page.gray
                 ps.stage = "Erasing"
         page = self._page(ps)
-        clean = self.cleaner.render(page)          # cheap when nothing changed: results are cached
         if kind in ("analyze", "render") or not ps.has_clean:
+            clean = self.cleaner.render(page)
             buf = io.BytesIO()
             Image.fromarray(clean).save(buf, "PNG", compress_level=1)
             with self.lock:
                 ps.clean = buf.getvalue()
+        else:                                      # nothing is erased differently: reuse the cleaned page
+            clean = np.asarray(Image.open(io.BytesIO(ps.clean)).convert("RGB"))
 
         want = kind == "translate" or (kind == "analyze" and self.auto_translate)
         if want:
@@ -651,10 +705,13 @@ class App:
                     traceback.print_exc()
                 with self.lock:
                     ps.tstate, ps.tnote = "error", str(exc)
-        if ps.tstate == "done":
+        # (a page whose last translation failed keeps the English it had: letter that again)
+        if ps.tstate == "done" or (kind == "typeset" and ps.has_english):
             with self.lock:
                 ps.stage = "Lettering"
-            english = self.cleaner.typeset(page, clean)
+                ch = self.lib.chapter_of(ps)
+                fonts = self.lib.fonts_for(ch) if ch is not None else {}
+            english = self.cleaner.typeset(page, clean, fonts)
             buf = io.BytesIO()
             Image.fromarray(english).save(buf, "PNG", compress_level=1)
             with self.lock:
@@ -670,12 +727,14 @@ class App:
                 if ch is not None:
                     ch.touch()
 
-    def submit(self, kind: str, ps: PageState, wait: float = 0.0, arg=None) -> None:
+    def submit(self, kind: str, ps: PageState, wait: float = 0.0, arg=None,
+               priority: Optional[int] = None) -> None:
         done = threading.Event()
         with self.lock:
             if ps.status != "working":
                 ps.status = "queued"
-        self.jobs.put((kind, ps, done, arg))
+            ps.job = kind
+        self.jobs.put((PRIORITY[kind] if priority is None else priority, next(self._seq), kind, ps, done, arg))
         if wait:
             done.wait(wait)
 
@@ -737,9 +796,105 @@ class App:
                 with self.lock:
                     ps.tstate, ps.tnote = "working", ""
                     ps.stage = "Waiting to be translated"
-                self.submit("translate", ps, arg=engine)
+                self.submit("translate", ps, arg=engine, priority=2)
                 queued += 1
         return queued, None
+
+    # ------------------------------------------------------------- fonts
+    def lettering(self, ch: Chapter) -> dict:
+        """The chapter's font choices, and the font that letters each style."""
+        from .typeset import ROLES
+        with self.lock:
+            choices = self.lib.fonts_for(ch)
+        book = self.fontbook.using(choices)
+        return {"fonts": choices, "fontsVersion": book.catalog.version,
+                "lettering": {r: {"id": book.font_id(r), "name": book.name(r), "how": book.how(r)}
+                              for r in ROLES}}
+
+    def font_ids(self, choices: dict) -> dict:
+        from .typeset import ROLES
+        book = self.fontbook.using(choices)
+        return {r: book.font_id(r) for r in ROLES}
+
+    def parse_fonts(self, raw) -> dict:
+        """A font change from the website: {style: font id, or "" for automatic}."""
+        from .typeset import ROLES
+        if not isinstance(raw, dict):
+            raise ValueError("fonts must map styles to fonts")
+        out = {}
+        for role, fid in raw.items():
+            if role not in ROLES:
+                raise ValueError(f"unknown style: {role}")
+            fid = str(fid or "").strip()
+            if fid and not self.fontbook.catalog.exists(fid):
+                raise ValueError("That font is not on this computer.")
+            out[role] = fid or None
+        return out
+
+    def reletter_chapter(self, ch: Chapter, first: Optional[str] = None) -> int:
+        """Letter the chapter's English pages again (its fonts changed), without
+        translating anything again. ``first`` is the page someone is looking
+        at: it goes before everything else. Returns how many pages."""
+        with self.lock:
+            pages = [p for p in self.lib.chapter_pages(ch) if p.has_english and p.tstate != "working"]
+            for p in sorted(pages, key=lambda p: p.id != first):
+                if p.id == first:
+                    self.submit("typeset", p, arg="reletter", priority=0)
+                elif p.id not in self._reletter:   # already waiting: it reads the newest fonts when it runs
+                    self._reletter.add(p.id)
+                    p.stage = "Waiting to be lettered again"
+                    self.submit("typeset", p, arg="reletter", priority=2)
+        return len(pages)
+
+    def fonts_json(self) -> dict:
+        from .typeset import ROLES
+        cat = self.fontbook.catalog
+        auto = {}
+        for role in ROLES:
+            fid, why = self.fontbook.auto(role)
+            auto[role] = {"id": fid, "name": cat.name_of(fid), "why": why}
+        return {"fonts": cat.public(), "version": cat.version, "auto": auto}
+
+    def font_preview(self, fid: str, role: str, text: str = "") -> bytes:
+        """PNG of a line lettered in a font, for the font picker."""
+        from .typeset import render_sample
+        book = self.fontbook.using({role: fid})
+        if book.file(fid) is None:                 # a free font that could not be downloaded
+            raise LookupError("This font could not be downloaded. Is the computer online?")
+        with self._preview_lock:
+            return render_sample(book, role, text)
+
+    def add_font(self, name: str, data: bytes) -> dict:
+        """Keep a font file someone added in the fonts folder; returns its catalogue entry."""
+        from PIL import ImageFont
+
+        from .typeset import FONT_EXTS, _display
+        base = Path(name).name
+        ext = Path(base).suffix.lower()
+        if ext not in FONT_EXTS:
+            raise ValueError("Choose a .ttf or .otf font file.")
+        if not data or len(data) > MAX_FONT:
+            raise ValueError(f"{base} is empty or too large for a font.")
+        try:
+            font = ImageFont.truetype(io.BytesIO(data), 24)
+            font.getbbox("A")
+            label = _display(*(str(v or "").strip() for v in font.getname()))
+        except Exception:                                      # noqa: BLE001
+            raise ValueError(f"{base} is not a font file this app can use.") from None
+        catalog = self.fontbook.catalog
+        same = next((e for e in catalog.entries() if e["name"].lower() == label.lower()), None)
+        if same is None:
+            stem = re.sub(r"[^\w\- .()]+", "", Path(base).stem).strip(" .") or "font"
+            folder = self.fontbook.dir
+            folder.mkdir(parents=True, exist_ok=True)
+            target, k = folder / f"{stem}{ext}", 2
+            while target.exists():                 # never overwrite another font of the same file name
+                target, k = folder / f"{stem} ({k}){ext}", k + 1
+            _write(target, data)
+            same = catalog.get(target.name)
+        if same is None:
+            raise ValueError(f"{base} could not be added.")
+        return {k: v for k, v in same.items() if not k.startswith("_")}
 
     def edit_block(self, ps: PageState, body: dict) -> bool:
         """Change one block's translation, style or whether it is lettered."""
@@ -766,6 +921,12 @@ class App:
                     block.style.pop("scale", None)
                 else:
                     block.style["scale"] = scale
+            if "font" in body:                     # checked against the catalogue by the caller
+                fid = str(body["font"] or "").strip()
+                if fid:
+                    block.style["font"] = fid
+                else:
+                    block.style.pop("font", None)
             if ps.tstate == "none":
                 ps.tstate = "done"                 # lettering typed in by hand counts
             ps.dirty = True
@@ -1152,21 +1313,40 @@ class Handler(BaseHTTPRequestHandler):
                 with app.lock:
                     detail["seriesList"] = sorted(set(c.series for c in app.lib.chapters.values() if c.series),
                                                   key=natural_key)
+                detail.update(app.lettering(ch))
                 return self._json(detail)
             if not rest and method == "POST":
                 body = self._json_body()
+                fonts = None
+                if "fonts" in body:
+                    try:
+                        fonts = app.parse_fonts(body["fonts"])
+                    except ValueError as exc:
+                        return self._error(400, str(exc))
+                # the fonts belong to the series: a new series (or a font change) may change them
+                before = app.font_ids(app.lib.fonts_for(ch)) if fonts or "series" in body else None
                 with app.lock:
-                    if "title" in body or "series" in body:
-                        app.lib.update_chapter(ch, body.get("title"), body.get("series"))
-                    if "notes" in body:
-                        app.lib.set_notes(ch, str(body["notes"]))
                     if isinstance(body.get("order"), list):
                         order = [str(p) for p in body["order"]]
                         if sorted(order) != sorted(ch.pages):
                             return self._error(400, "the new order must list every page of the chapter once")
                         ch.pages = order
                         ch.touch()
-                    return self._json(app.chapter_detail(ch))
+                    if "title" in body or "series" in body:
+                        app.lib.update_chapter(ch, body.get("title"), body.get("series"))
+                    if "notes" in body:
+                        app.lib.set_notes(ch, str(body["notes"]))
+                    if fonts:
+                        app.lib.set_fonts(ch, fonts)
+                    after = app.lib.fonts_for(ch)
+                relettering = 0
+                if before is not None and app.font_ids(after) != before:
+                    relettering = app.reletter_chapter(ch, first=str(body.get("first") or "") or None)
+                with app.lock:
+                    detail = app.chapter_detail(ch)
+                detail.update(app.lettering(ch))
+                detail["relettering"] = relettering
+                return self._json(detail)
             if not rest and method == "DELETE":
                 with app.lock:
                     for pid in ch.pages:
@@ -1209,7 +1389,31 @@ class Handler(BaseHTTPRequestHandler):
                 if ch:
                     out["chapter"] = {"id": ch.id, "title": ch.title, "series": ch.series,
                                       "notes": app.lib.notes_for(ch)}
+            if ch:
+                out["chapter"].update(app.lettering(ch))
             return self._json(out)
+
+        # ---- fonts
+        if parts == ["fonts"] and method == "GET":
+            return self._json(app.fonts_json())
+        if parts == ["fonts"] and method == "POST":
+            try:
+                entry = app.add_font(q.get("name") or "font.ttf", self._body())
+            except ValueError as exc:
+                return self._error(400, str(exc))
+            return self._json(dict(app.fonts_json(), font=entry), 201)
+        if parts == ["fonts", "preview"] and method == "GET":
+            from .typeset import ROLES
+            role, fid = q.get("role", "dialogue"), q.get("id", "")
+            if role not in ROLES:
+                return self._error(400, "unknown style")
+            if not app.fontbook.catalog.exists(fid):
+                return self._error(404, "no such font")
+            try:
+                png = app.font_preview(fid, role, q.get("text", "")[:200])
+            except LookupError as exc:
+                return self._error(409, str(exc))
+            return self._send(200, png, "image/png", cache="v" in q)
 
         if parts == ["settings"] and method == "POST":
             body = self._json_body()
@@ -1304,6 +1508,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._error(400, "unknown engine")
                     app.translate(ps, engine)
                 elif rest == ["block"]:
+                    if body.get("font") and not app.fontbook.catalog.exists(str(body["font"])):
+                        return self._error(400, "That font is not on this computer.")
                     if not app.edit_block(ps, body):
                         return self._error(404, "no such block")
                 elif rest == ["undo"]:

@@ -13,15 +13,25 @@ For every text block this module
 3. fits the words to the *shape* of that area (lines are longer where a
    balloon is wider), choosing the largest size that fits, and draws them.
 
-The fonts are ordinary files in the ``fonts`` folder.  To letter with your
-own, drop them there and name them in ``fonts/fonts.json``, for example
-``{"dialogue": "MyComicFont.ttf", "shout": "MyLoudFont.otf"}``.
+Which font letters each style is decided, in this order, by: the font chosen
+for that one line, the font chosen for the chapter (in the app it belongs to
+the series), ``fonts/fonts.json`` (for example
+``{"dialogue": "MyComicFont.ttf", "shout": "MyLoudFont.otf"}``), a
+professional comic font you own, and the free default.  :class:`FontCatalog`
+lists everything that can be chosen: the free comic fonts below (downloaded
+when first used), the files in the ``fonts`` folder and the fonts installed
+in Windows.
 """
 from __future__ import annotations
 
+import copy
+import hashlib
+import io
 import json
 import os
 import re
+import threading
+import unicodedata
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -30,7 +40,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .blocks import TextBlock, erased_fraction
-from .models import default_fonts_dir, ensure_font
+from .models import FONTS, default_fonts_dir, ensure_font
 from .textmask import _cc, _cdist, to_gray
 
 SS = 3                                   # text is drawn at 3x and scaled down
@@ -40,6 +50,8 @@ EMPHASIS_GROWTH = 1.7                    # how far loud lettering may grow to fi
 SQUEEZE = 0.88                           # letterers condense text to ~85-93% before shrinking it
 
 ROLES = ("dialogue", "shout", "title", "narration", "handwritten")
+ROLE_NAMES = {"dialogue": "dialogue", "narration": "captions", "shout": "shouts", "title": "titles",
+              "handwritten": "asides"}
 # Open-licensed defaults, chosen by lettering real pages with candidates side
 # by side: an upright, heavy, compact comic face for dialogue and its italic
 # for captions (the usual English-manga pairing).  In fonts.json,
@@ -50,6 +62,28 @@ ROLE_FONT = {
     "title": "Anton-Regular.ttf",
     "narration": "BalsamiqSans-BoldItalic.ttf",
     "handwritten": "PatrickHand-Regular.ttf",
+}
+# The free fonts the font picker offers (all in models.FONTS):
+# file -> (family, style, what it suits, why you might pick it)
+FREE_FONTS = {
+    "BalsamiqSans-Bold.ttf": ("Balsamiq Sans", "Bold", "dialogue",
+                              "Upright, heavy and compact, like professional manga dialogue. The default."),
+    "ComicNeue-Bold.ttf": ("Comic Neue", "Bold", "dialogue", "The classic comic hand, tidied up."),
+    "Pangolin-Regular.ttf": ("Pangolin", "Regular", "dialogue", "Light, friendly marker lettering."),
+    "Itim-Regular.ttf": ("Itim", "Regular", "dialogue", "Rounded and easy to read. Suits gentle stories."),
+    "Mali-Bold.ttf": ("Mali", "Bold", "dialogue", "Bold and round. Wide, so it sets smaller in narrow balloons."),
+    "Kalam-Bold.ttf": ("Kalam", "Bold", "dialogue", "Slanted handwriting with plenty of energy."),
+    "BalsamiqSans-BoldItalic.ttf": ("Balsamiq Sans", "Bold Italic", "narration", "The default for captions."),
+    "ComicNeue-BoldItalic.ttf": ("Comic Neue", "Bold Italic", "narration", "Captions to go with Comic Neue."),
+    "Mali-BoldItalic.ttf": ("Mali", "Bold Italic", "narration", "Captions to go with Mali."),
+    "Bangers-Regular.ttf": ("Bangers", "Regular", "shout", "Condensed comic shouting. The default for shouts."),
+    "LuckiestGuy-Regular.ttf": ("Luckiest Guy", "Regular", "shout", "Chunky and loud."),
+    "Creepster-Regular.ttf": ("Creepster", "Regular", "shout", "Dripping horror lettering."),
+    "Anton-Regular.ttf": ("Anton", "Regular", "title", "Heavy display capitals. The default for titles."),
+    "BebasNeue-Regular.ttf": ("Bebas Neue", "Regular", "title", "Tall, clean display capitals."),
+    "PatrickHand-Regular.ttf": ("Patrick Hand", "Regular", "handwritten", "Neat handwriting. The default for asides."),
+    "SpecialElite-Regular.ttf": ("Special Elite", "Regular", "special", "Typewriter, for letters, reports and screens."),
+    "CrimsonText-Bold.ttf": ("Crimson Text", "Bold", "special", "A book serif, for signs, books and formal notices."),
 }
 # Professional comic-lettering families.  They cannot be shipped or fetched
 # (paid licences), but if one is installed on this computer, or its file is
@@ -66,121 +100,390 @@ SYSTEM_FALLBACK = {
     "title": ("impact.ttf", "ariblk.ttf"), "narration": ("comicz.ttf", "arialbi.ttf"),
     "handwritten": ("comic.ttf", "arial.ttf"),
 }
+FONT_EXTS = (".ttf", ".otf", ".ttc")
+# icon and symbol fonts: nothing to letter with
+NOT_LETTERS = ("wingdings", "webdings", "symbol", "marlett", "mdl2", "fluent icons", "emoji", "bookshelf",
+               "mt extra", "ms reference specialty")
+# what a character the font lacks becomes, when dropping its accent is no help
+STAND_IN = {"—": "--", "–": "-", "―": "-", "‒": "-", "‘": "'", "’": "'", "‚": ",", "“": '"', "”": '"',
+            "„": '"', "«": '"', "»": '"', "〜": "~", "♪": "~", "♫": "~", "♥": "", "❤": "", "♡": "",
+            "★": "*", "☆": "*"}
+# what the font picker letters with each style
+SAMPLES = {
+    "dialogue": "I told you we'd make it! Now hurry up!",
+    "narration": "Meanwhile, on the other side of town...",
+    "shout": "Get down!!",
+    "title": "Chapter 12: The long night",
+    "handwritten": "(so sleepy...)",
+}
+_WEIGHTS = (("thin", 100), ("extralight", 200), ("ultralight", 200), ("light", 300), ("medium", 500),
+            ("semibold", 600), ("demibold", 600), ("extrabold", 800), ("ultrabold", 800), ("bold", 700),
+            ("black", 900), ("heavy", 900))
 
 
-def _family(path: Path) -> str:
-    try:
-        name = ImageFont.truetype(str(path), 20).getname()
-        return f"{name[0]} {name[1]}".lower()
-    except Exception:                                       # noqa: BLE001
-        return ""
+def split_spec(spec: str) -> Tuple[str, Optional[float]]:
+    """"File.ttf@650" -> ("File.ttf", 650.0): the weight of a variable font."""
+    if "@" in spec:
+        name, weight = spec.rsplit("@", 1)
+        try:
+            return name, float(weight)
+        except ValueError:
+            return spec, None
+    return spec, None
 
 
-def find_pro_font(fonts_dir: Path, italic: bool = False) -> Optional[Path]:
-    """A professional dialogue font the user owns: in the fonts folder or installed.
+def _weight(style: str) -> int:
+    s = style.lower().replace(" ", "").replace("-", "")
+    return next((w for word, w in _WEIGHTS if word in s), 400)
 
-    With ``italic`` the italic cut of the best family is preferred (captions).
-    """
-    folders = [fonts_dir, Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"]
+
+def _italic(style: str) -> bool:
+    return any(w in style.lower() for w in ("italic", "oblique"))
+
+
+def _display(family: str, style: str) -> str:
+    return family if style.strip().lower() in ("", "regular", "normal", "book", "roman") else f"{family} {style}"
+
+
+def pro_rank(family: str) -> Optional[int]:
+    """Where a family stands in :data:`PRO_DIALOGUE`, or None if it is not a comic lettering font."""
+    fam = family.lower()
+    for rank, key in enumerate(PRO_DIALOGUE):
+        if key in fam or key.replace(" ", "") in fam.replace(" ", ""):
+            return rank
+    return None
+
+
+def system_font_dirs() -> List[Tuple[str, Path]]:
+    """Where Windows keeps installed fonts: for everyone, and for this user."""
+    dirs = [("system", Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts")]
     local = os.environ.get("LOCALAPPDATA")
     if local:
-        folders.append(Path(local) / "Microsoft" / "Windows" / "Fonts")
-    found = {}
-    for folder in folders:
-        if not folder.is_dir():
-            continue
-        for f in folder.iterdir():
-            if f.suffix.lower() not in (".ttf", ".otf", ".ttc"):
-                continue
-            stem = f.stem.lower().replace("-", " ").replace("_", " ")
-            # cheap filter on the file name first; opening hundreds of fonts is slow
-            if not any(k.replace(" ", "") in stem.replace(" ", "") for k in PRO_DIALOGUE):
-                continue
-            fam = _family(f) or stem
-            for rank, key in enumerate(PRO_DIALOGUE):
-                if key in fam or key.replace(" ", "") in fam.replace(" ", ""):
-                    # prefer the upright regular cut of the best-ranked family
-                    slant = any(w in fam for w in ("italic", "oblique"))
-                    heavy = any(w in fam for w in ("bold", "heavy", "black"))
-                    found.setdefault((rank, slant != italic, heavy, str(f).lower()), f)
-                    break
-    return found[min(found)] if found else None
+        dirs.append(("user", Path(local) / "Microsoft" / "Windows" / "Fonts"))
+    return [(key, d) for key, d in dirs if d.is_dir()]
+
+
+class FontCatalog:
+    """Every font that can be chosen for lettering.
+
+    Groups: ``free`` (the comic fonts in :data:`FREE_FONTS`, downloaded when
+    first used), ``yours`` (the files in the fonts folder, and professional
+    comic fonts installed on this computer) and ``installed`` (the other
+    fonts installed in Windows).  A font is named by an id: its file name in
+    the fonts folder, or ``system/<file>`` / ``user/<file>`` when installed.
+    """
+
+    def __init__(self, fonts_dir: Path):
+        self.dir = Path(fonts_dir)
+        self._lock = threading.RLock()
+        self._names: Dict[tuple, Optional[Tuple[str, str]]] = {}
+        self._list: List[dict] = []
+        self._by_id: Dict[str, dict] = {}
+        self._sig = None
+        self._version = ""
+
+    @staticmethod
+    def _files(folder: Path) -> List[Path]:
+        try:
+            return sorted((f for f in folder.iterdir() if f.suffix.lower() in FONT_EXTS and f.is_file()),
+                          key=lambda f: f.name.lower())
+        except OSError:
+            return []
+
+    def _signature(self) -> tuple:
+        sig = []
+        for f in self._files(self.dir):
+            try:
+                st = f.stat()
+                sig.append((f.name, st.st_size, int(st.st_mtime)))
+            except OSError:
+                pass
+        for key, folder in system_font_dirs():       # changes when a font is installed or removed
+            try:
+                sig.append((key, int(folder.stat().st_mtime)))
+            except OSError:
+                pass
+        return tuple(sig)
+
+    def _name(self, path: Path) -> Optional[Tuple[str, str]]:
+        """(family, style) of a font file, or None if it cannot be opened."""
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        key = (str(path).lower(), st.st_size, int(st.st_mtime))
+        if key not in self._names:
+            try:
+                family, style = ImageFont.truetype(str(path), 12).getname()
+                self._names[key] = (str(family or path.stem).strip(), str(style or "Regular").strip())
+            except Exception:                               # noqa: BLE001 - not a font Pillow can read
+                self._names[key] = None
+        return self._names[key]
+
+    def entries(self) -> List[dict]:
+        with self._lock:
+            sig = self._signature()
+            if sig != self._sig:
+                self._build()
+                self._sig = sig
+                self._version = hashlib.sha1(repr(sig).encode("utf-8")).hexdigest()[:10]
+            return self._list
+
+    @property
+    def version(self) -> str:
+        """Changes whenever a font is added or removed."""
+        self.entries()
+        return self._version
+
+    def _build(self) -> None:
+        items: List[dict] = []
+        seen = set()
+
+        def add(fid, family, style, group, ready, use="", note=""):
+            name = _display(family, style)
+            if name.lower() in seen:                # the same font twice: keep the first
+                return
+            seen.add(name.lower())
+            items.append({"id": fid, "name": name, "family": family, "style": style, "group": group,
+                          "use": use, "note": note, "pro": pro_rank(family) is not None, "ready": ready,
+                          "_rank": pro_rank(family)})
+
+        for file, (family, style, use, note) in FREE_FONTS.items():
+            add(file, family, style, "free", (self.dir / file).is_file(), use, note)
+        for f in self._files(self.dir):
+            if f.name not in FREE_FONTS:
+                got = self._name(f)
+                if got:
+                    add(f.name, got[0], got[1], "yours", True)
+        for key, folder in system_font_dirs():
+            for f in self._files(folder):
+                got = self._name(f)
+                if got and not any(w in got[0].lower() for w in NOT_LETTERS):
+                    add(f"{key}/{f.name}", got[0], got[1], "yours" if pro_rank(got[0]) is not None else "installed", True)
+
+        def by_style(e):
+            return (e["family"].lower(), _italic(e["style"]), _weight(e["style"]), e["style"].lower())
+        free = [e for e in items if e["group"] == "free"]
+        yours = sorted((e for e in items if e["group"] == "yours"),
+                       key=lambda e: (e["_rank"] is None, e["_rank"] or 0) + by_style(e))
+        installed = sorted((e for e in items if e["group"] == "installed"), key=by_style)
+        families: Dict[str, List[dict]] = {}
+        for e in items:
+            families.setdefault(e["family"].lower(), []).append(e)
+        for e in items:                             # captions use the italic of the dialogue font
+            e["italic"] = None
+            if not _italic(e["style"]):
+                sibs = [s for s in families[e["family"].lower()] if _italic(s["style"])]
+                if sibs:
+                    w = _weight(e["style"])
+                    e["italic"] = min(sibs, key=lambda s: (abs(_weight(s["style"]) - w), s["id"]))["id"]
+        self._list = free + yours + installed
+        self._by_id = {e["id"]: e for e in self._list}
+
+    def public(self) -> List[dict]:
+        """The catalogue as the website shows it."""
+        return [{k: v for k, v in e.items() if not k.startswith("_")} for e in self.entries()]
+
+    def get(self, fid: Optional[str]) -> Optional[dict]:
+        if not fid:
+            return None
+        self.entries()
+        return self._by_id.get(split_spec(str(fid))[0])
+
+    def exists(self, fid: Optional[str]) -> bool:
+        return self.get(fid) is not None
+
+    def path_of(self, fid: str) -> Optional[Path]:
+        """The file of a font id, if it is on this computer (a free font may
+        still have to be downloaded).  Ids never reach outside the font folders."""
+        name = split_spec(str(fid))[0]
+        head, _, tail = name.partition("/")
+        if tail and head in ("system", "user"):
+            if tail != Path(tail).name:
+                return None
+            folder = dict(system_font_dirs()).get(head)
+            return folder / tail if folder is not None and (folder / tail).is_file() else None
+        p = Path(name)
+        if p.is_absolute():                         # fonts.json and the command line may name any file
+            return p if p.is_file() else None
+        if p.name != name:
+            return None
+        return self.dir / name if (self.dir / name).is_file() else None
+
+    def name_of(self, fid: str) -> str:
+        e = self.get(fid)
+        if e:
+            return e["name"]
+        p = self.path_of(fid)
+        got = self._name(p) if p is not None else None
+        return _display(*got) if got else Path(split_spec(str(fid))[0]).stem
+
+    def italic_of(self, fid: str) -> Optional[str]:
+        return (self.get(fid) or {}).get("italic")
+
+    def best_pro(self, italic: bool = False) -> Optional[str]:
+        """The professional comic font to letter with, if this computer has one:
+        the upright regular cut of the best-ranked family (its italic for captions)."""
+        found = [e for e in self.entries() if e["pro"]]
+        if not found:
+            return None
+        return min(found, key=lambda e: (e["_rank"], _italic(e["style"]) != italic,
+                                         _weight(e["style"]) >= 700, e["id"].lower()))["id"]
+
+    def find(self, query: str) -> Optional[str]:
+        """A font id for a name typed by a person ('Comic Neue Bold'), an id or a file path."""
+        q = query.strip().strip('"')
+        if not q:
+            return None
+        if self.get(q):
+            return q
+        p = Path(q)
+        if p.suffix.lower() in FONT_EXTS and p.is_file():
+            return str(p.resolve())
+        low = q.lower()
+        entries = self.entries()
+        for e in entries:
+            if e["name"].lower() == low:
+                return e["id"]
+        family = [e for e in entries if e["family"].lower() == low]
+        if family:
+            return min(family, key=lambda e: (_italic(e["style"]), abs(_weight(e["style"]) - 400)))["id"]
+        part = [e for e in entries if low in e["name"].lower()]
+        return part[0]["id"] if len(part) == 1 else None
 
 
 class FontBook:
-    """Resolves lettering roles to font files and caches the loaded faces."""
+    """Which font letters each style, and the loaded faces.
 
-    def __init__(self, fonts_dir: Optional[Path] = None, log: Optional[Callable[[str], None]] = None):
+    ``choices`` are the fonts picked for a chapter (style -> font id); make a
+    book for them with :meth:`using`, which shares the loaded faces.  A style
+    without a choice is lettered automatically: captions follow the dialogue
+    font (its italic when it has one), otherwise ``fonts.json``, then a
+    professional comic font you own, then the free default.
+    """
+
+    def __init__(self, fonts_dir: Optional[Path] = None, log: Optional[Callable[[str], None]] = None,
+                 catalog: Optional[FontCatalog] = None):
         self.dir = Path(fonts_dir) if fonts_dir else default_fonts_dir()
         self.log = log or (lambda s: None)
+        self.catalog = catalog or FontCatalog(self.dir)
         self.custom: Dict[str, str] = {}
         cfg = self.dir / "fonts.json"
         if cfg.exists():
             try:
                 self.custom = {k: str(v) for k, v in json.loads(cfg.read_text(encoding="utf-8")).items()
                                if k in ROLES}
-            except (ValueError, OSError):
+            except (ValueError, OSError, AttributeError):
                 self.log("fonts.json could not be read; using the default fonts")
-        self._specs: Dict[str, Tuple[str, Optional[float]]] = {}
-        self._faces: Dict[Tuple[str, float], ImageFont.FreeTypeFont] = {}
-        self._caps: Dict[str, float] = {}
-        self._unicase: Dict[str, bool] = {}
+        self.choices: Dict[str, str] = {}
+        self._ids: Dict[str, Tuple[str, str]] = {}          # style -> (font id, how it was chosen)
+        # shared by every book made with using()
+        self._files: Dict[str, Tuple[str, Optional[float]]] = {}
+        self._faces: Dict[tuple, ImageFont.FreeTypeFont] = {}
+        self._caps: Dict[tuple, float] = {}
+        self._unicase: Dict[tuple, bool] = {}
+        self._glyphs: Dict[tuple, bool] = {}
+        self._said: set = set()
 
-    @staticmethod
-    def _split(spec: str) -> Tuple[str, Optional[float]]:
-        """"File.ttf@650" -> ("File.ttf", 650.0)."""
-        if "@" in spec:
-            name, weight = spec.rsplit("@", 1)
-            try:
-                return name, float(weight)
-            except ValueError:
-                return spec, None
-        return spec, None
+    def using(self, choices: Optional[Dict[str, str]]) -> "FontBook":
+        """The same book with these fonts picked (style -> font id)."""
+        view = copy.copy(self)
+        view.choices = {r: str(f) for r, f in (choices or {}).items() if r in ROLES and f}
+        view._ids = {}
+        return view
+
+    def _say(self, msg: str) -> None:
+        if msg not in self._said:
+            self._said.add(msg)
+            self.log(msg)
+
+    def usable(self, fid: Optional[str]) -> bool:
+        return bool(fid) and (self.catalog.exists(fid) or self.catalog.path_of(fid) is not None)
+
+    def _resolve(self, role: str) -> Tuple[str, str]:
+        pick = self.choices.get(role)
+        if pick:
+            if self.usable(pick):
+                return pick, "chosen"
+            self._say(f"The font chosen for {ROLE_NAMES[role]} ({pick}) is not on this computer; "
+                      f"using the automatic one")
+        lead = self.choices.get("dialogue")
+        if role == "narration" and lead and self.usable(lead):
+            return self.catalog.italic_of(lead) or lead, "dialogue"
+        return self.auto(role)
+
+    def auto(self, role: str) -> Tuple[str, str]:
+        """The font of a style when none was picked, and where it comes from:
+        'fonts.json', 'pro' (a professional comic font you own) or 'default'."""
+        name = self.custom.get(role)
+        if name:
+            fname, _ = split_spec(name)
+            p = Path(fname) if Path(fname).is_absolute() else self.dir / fname
+            if p.exists():
+                return name, "fonts.json"
+            self._say(f"fonts.json names {fname} for '{role}', but that file is missing")
+        if role in ("dialogue", "narration"):
+            pro = self.catalog.best_pro(italic=role == "narration")
+            if pro:
+                self._say(f"Lettering {ROLE_NAMES[role]} with {self.catalog.name_of(pro)}")
+                return pro, "pro"
+        return ROLE_FONT[role], "default"
+
+    def font_id(self, role: str) -> str:
+        """The id of the font that letters ``role``."""
+        if role not in self._ids:
+            self._ids[role] = self._resolve(role)
+        return self._ids[role][0]
+
+    def how(self, role: str) -> str:
+        """'chosen', 'dialogue' (follows the dialogue font) or what :meth:`auto` says."""
+        self.font_id(role)
+        return self._ids[role][1]
+
+    def name(self, role: str) -> str:
+        return self.catalog.name_of(self.font_id(role))
+
+    def file(self, fid: str) -> Optional[Tuple[str, Optional[float]]]:
+        """(path, weight) of a font id; a free font is downloaded the first time."""
+        hit = self._files.get(fid)
+        if hit is None:
+            name, weight = split_spec(fid)
+            path = self.catalog.path_of(name)
+            if path is None and name in FONTS:
+                path = ensure_font(name, self.dir, self.log)
+            if path is None:
+                return None
+            hit = self._files[fid] = (str(path), weight)
+        return hit
 
     def spec(self, role: str) -> Tuple[str, Optional[float]]:
         """(font file, weight for a variable font or None) for a role."""
-        if role in self._specs:
-            return self._specs[role]
-        found, weight = None, None
-        name = self.custom.get(role)
-        if name:                                            # 1. what fonts.json says
-            fname, weight = self._split(name)
-            p = Path(fname) if Path(fname).is_absolute() else self.dir / fname
-            if p.exists():
-                found = str(p)
-            else:
-                weight = None
-                self.log(f"fonts.json names {fname} for '{role}', but that file is missing")
-        if found is None and role in ("dialogue", "narration"):   # 2. a professional font the user owns
-            pro = find_pro_font(self.dir, italic=role == "narration")
-            if pro is not None:
-                found = str(pro)
-                self.log(f"Lettering {role} with {pro.name}")
-        if found is None:                                   # 3. the open-licensed default
-            fname, weight = self._split(ROLE_FONT[role])
-            p = ensure_font(fname, self.dir, self.log)
-            found = str(p) if p else None
-        if found is None:                                   # 4. something that ships with Windows
-            weight = None
-            windir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-            for cand in SYSTEM_FALLBACK[role]:
-                if (windir / cand).exists():
-                    found = str(windir / cand)
-                    break
-        if found is None:
+        fid = self.font_id(role)
+        got = self.file(fid)
+        if got is None and fid != ROLE_FONT[role]:
+            self._say(f"Could not open the font {self.catalog.name_of(fid)}; "
+                      f"lettering {ROLE_NAMES[role]} with the default")
+            got = self.file(ROLE_FONT[role])
+        for cand in SYSTEM_FALLBACK[role]:                  # offline, before the default was downloaded
+            if got is not None:
+                break
+            got = self.file(f"system/{cand}")
+        if got is None:
             raise RuntimeError("No usable lettering font was found. Put a .ttf file in the fonts folder.")
-        self._specs[role] = (found, weight)
-        return self._specs[role]
+        return got
 
     def path(self, role: str) -> str:
         return self.spec(role)[0]
 
     def face(self, role: str, size: float) -> ImageFont.FreeTypeFont:
-        key = (role, round(float(size), 2))
+        path, weight = self.spec(role)
+        return self._open(path, weight, size)
+
+    def _open(self, path: str, weight: Optional[float], size: float) -> ImageFont.FreeTypeFont:
+        key = (path, weight, round(float(size), 2))
         f = self._faces.get(key)
         if f is None:
-            path, weight = self.spec(role)
-            f = ImageFont.truetype(path, key[1])
+            f = ImageFont.truetype(path, key[2])
             if weight is not None:
                 try:                                        # variable font: set the weight axis
                     axes = f.get_variation_axes()
@@ -202,10 +505,11 @@ class FontBook:
 
     def cap(self, role: str) -> float:
         """Height of a capital letter as a share of the font size."""
-        if role not in self._caps:
-            box = self.face(role, 200).getbbox("H")
-            self._caps[role] = max(0.4, (box[3] - box[1]) / 200.0)
-        return self._caps[role]
+        spec = self.spec(role)
+        if spec not in self._caps:
+            box = self._open(*spec, 200).getbbox("H")
+            self._caps[spec] = max(0.4, (box[3] - box[1]) / 200.0)
+        return self._caps[spec]
 
     def unicase(self, role: str) -> bool:
         """True for comic fonts whose lower case is a second set of capitals.
@@ -213,11 +517,71 @@ class FontBook:
         In those fonts the upper-case I carries the crossbars and is meant
         only for the pronoun; every other i is typed in lower case.
         """
-        if role not in self._unicase:
-            face = self.face(role, 200)
+        spec = self.spec(role)
+        if spec not in self._unicase:
+            face = self._open(*spec, 200)
             lo, up = face.getbbox("x"), face.getbbox("X")
-            self._unicase[role] = (lo[3] - lo[1]) >= 0.92 * (up[3] - up[1])
-        return self._unicase[role]
+            self._unicase[spec] = (lo[3] - lo[1]) >= 0.92 * (up[3] - up[1])
+        return self._unicase[spec]
+
+    def has(self, role: str, ch: str) -> bool:
+        """Does the font of ``role`` draw ``ch``?  (A missing character comes
+        out as the font's 'not defined' box, so compare with that.)"""
+        spec = self.spec(role)
+        key = (spec, ch)
+        hit = self._glyphs.get(key)
+        if hit is None:
+            face = self._open(*spec, 48)
+            blank, mark = face.getmask("\U0010FFFD"), face.getmask(ch)
+            hit = self._glyphs[key] = not (mark.size == blank.size and bytes(mark) == bytes(blank))
+        return hit
+
+    def cover(self, role: str, text: str) -> str:
+        """``text`` with the characters the font lacks swapped for plain ones
+        (RYŌ becomes RYO, … becomes ..., a missing ♥ is left out), so the
+        lettering never shows an empty box."""
+        if text.isascii():
+            return text
+        out = []
+        for ch in text:
+            if ch.isascii() or ch.isspace() or self.has(role, ch):
+                out.append(ch)
+                continue
+            alt = STAND_IN.get(ch)
+            if alt is None:
+                alt = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+            out.append("".join(c for c in alt if c.isascii() or self.has(role, c)))
+        return "".join(out)
+
+
+def render_sample(book: FontBook, role: str, text: str = "", width: int = 600, height: int = 120,
+                  ink: Tuple[int, int, int] = (0, 0, 0)) -> bytes:
+    """A transparent PNG of ``text`` lettered the way ``book`` letters ``role``
+    (in capitals, at the same capital height in every font, so they compare
+    fairly), centred on at most two lines."""
+    text = re.sub(r"\s+", " ", text or "").strip()[:160] or SAMPLES[role]
+    caps = ROLE_CAPS[role]
+    words = split_words(text, caps, caps and book.unicase(role))
+    words = [w for w in (book.cover(role, w) for w in words) if w.strip()] or ["..."]
+    pad, cap = 16, 30.0
+    while True:
+        face = book.face(role, cap / book.cap(role))
+        lines = _wrap(words, [width - 2 * pad] * 2, face.getlength, hyphenate=False)
+        if lines is not None or cap <= 12:
+            break
+        cap *= 0.9
+    lines = lines or [" ".join(words)]
+    pitch = 1.34 * cap
+    base = (height - (len(lines) - 1) * pitch - cap) / 2 + cap
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    for i, line in enumerate(lines):
+        draw.text((width / 2, base + i * pitch), line, font=face, fill=255, anchor="ms")
+    im = Image.new("RGBA", (width, height), tuple(ink) + (0,))
+    im.putalpha(mask)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
 
 
 # ------------------------------------------------------------------- words
@@ -624,12 +988,18 @@ def _draw(shape, layout: dict, book: FontBook, stroke: float = 0.0) -> np.ndarra
 
 
 class Typesetter:
-    def __init__(self, fonts_dir: Optional[Path] = None, log: Optional[Callable[[str], None]] = None):
-        self.book = FontBook(fonts_dir, log)
+    def __init__(self, fonts_dir: Optional[Path] = None, log: Optional[Callable[[str], None]] = None,
+                 catalog: Optional[FontCatalog] = None):
+        self.book = FontBook(fonts_dir, log, catalog)
         self._nobreak: frozenset = frozenset()
 
-    def typeset(self, page, clean_rgb: np.ndarray) -> np.ndarray:
-        """Draw every translated block of ``page`` onto the cleaned page."""
+    def typeset(self, page, clean_rgb: np.ndarray, fonts: Optional[Dict[str, str]] = None) -> np.ndarray:
+        """Draw every translated block of ``page`` onto the cleaned page.
+
+        ``fonts`` are the fonts picked for the chapter (style -> font id); a
+        block's own ``style["font"]`` wins over them for that block.
+        """
+        book = self.book.using(fonts)
         out = clean_rgb.copy()
         H, W = out.shape[:2]
         flat_m, art_m = page.masks()
@@ -663,15 +1033,21 @@ class Typesetter:
             src = b.font if re.search(r"[A-Za-z0-9]", b.translation) else max(b.font, 0.85 * dominant)
             area = find_area(clean, b, cell, 0.9 * src)
             role = override if override in ROLES else choose_role(b, area, dominant)
+            own = b.style.get("font")                   # a font picked for this one line
+            bk = book.using(dict(book.choices, **{role: own})) if own else book
             look = read_style(page.work, b, area["bg"])
             caps = ROLE_CAPS[role]
-            words = split_words(b.translation, caps, caps and self.book.unicase(role))
+            words = split_words(b.translation, caps, caps and bk.unicase(role))
+            words = [w for w in (bk.cover(role, w) for w in words) if w.strip()]
+            if not words:                               # nothing this font can draw
+                b.layout = None
+                continue
             # capitals about three quarters as tall as the original glyphs
-            size_max = CAP_SHARE * src / self.book.cap(role) * float(b.style.get("scale", 1.0))
+            size_max = CAP_SHARE * src / bk.cap(role) * float(b.style.get("scale", 1.0))
             if not caps:
                 size_max *= 1.25
             size_max = float(np.clip(size_max, 6.0, 0.2 * max(H, W)))
-            plans.append({"block": b, "area": area, "role": role, "look": look, "words": words,
+            plans.append({"block": b, "area": area, "role": role, "look": look, "words": words, "book": bk,
                           "size_max": size_max, "size_min": max(5.0, 0.45 * size_max),
                           "cell": cell, "src": src, "loud": role in ("shout", "title") or src >= 1.25 * dominant})
 
@@ -706,7 +1082,8 @@ class Typesetter:
 
         # ordinary dialogue is lettered at one size across the page
         peers = [p for p in plans if p["role"] == "dialogue" and not p["loud"] and not p["fit"].get("overflow")
-                 and 0.8 <= p["block"].font / dominant <= 1.25 and "scale" not in p["block"].style]
+                 and 0.8 <= p["block"].font / dominant <= 1.25
+                 and "scale" not in p["block"].style and "font" not in p["block"].style]
         if len(peers) >= 2:
             common = float(np.median([p["fit"]["size"] for p in peers]))
             for p in peers:
@@ -746,10 +1123,10 @@ class Typesetter:
             left = float(b.box[0] - ox)                  # a caption keeps its left edge
         p["shape"] = mask.shape
         low = p["size_min"] if size_min is None else size_min
-        words, role, nb = p["words"], p["role"], self._nobreak
+        words, role, nb, book = p["words"], p["role"], self._nobreak, p["book"]
 
         def attempt(lo, squeeze=1.0, hyphenate=False, left_x=left, one_line=False):
-            return fit_text(words, self.book, role, mask, (ax, ay), size_max, lo, left_x,
+            return fit_text(words, book, role, mask, (ax, ay), size_max, lo, left_x,
                             max_lines_allowed=1 if one_line else 999, hyphenate=hyphenate,
                             squeeze=squeeze, nobreak=nb)
 
@@ -769,7 +1146,7 @@ class Typesetter:
         if fit is None and left is not None:             # no room from that edge: centre it instead
             fit = attempt(low, SQUEEZE, True, left_x=None)
         if fit is None:
-            fit = _force_fit(words, self.book, role, mask.shape, (ax, ay), low)
+            fit = _force_fit(words, book, role, mask.shape, (ax, ay), low)
         return fit
 
     def _paint(self, out: np.ndarray, p: dict, gray_page: bool) -> None:
@@ -780,8 +1157,9 @@ class Typesetter:
         stroke = 0.0
         if halo is not None and not area["flat"]:
             stroke = max(1.2, 0.13 * fit["size"])        # the original was outlined: keep that
-        alpha = _draw(p["shape"], fit, self.book)
-        edge = _draw(p["shape"], fit, self.book, stroke) if stroke else None
+        book = p["book"]
+        alpha = _draw(p["shape"], fit, book)
+        edge = _draw(p["shape"], fit, book, stroke) if stroke else None
         if p["turn"]:
             alpha = np.rot90(alpha, -1)
             edge = np.rot90(edge, -1) if edge is not None else None
@@ -804,4 +1182,5 @@ class Typesetter:
             if xs.size else list(b.box)
         b.layout = {"role": p["role"], "size": round(float(fit["size"]), 1), "lines": fit["lines"],
                     "box": box, "balloon": bool(area["balloon"]), "overflow": bool(fit.get("overflow")),
-                    "rotated": bool(p["turn"]), "squeeze": round(float(fit.get("squeeze", 1.0)), 2)}
+                    "rotated": bool(p["turn"]), "squeeze": round(float(fit.get("squeeze", 1.0)), 2),
+                    "font": book.font_id(p["role"]), "fontName": book.name(p["role"])}

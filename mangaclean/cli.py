@@ -47,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "translate is used automatically)")
     p.add_argument("--script", action="store_true",
                    help="with --translate: also save <name>.txt with the Japanese and English of every block")
+    p.add_argument("--font", action="append", metavar="[STYLE=]FONT",
+                   help="with --translate: letter in this font. FONT is a name from --list-fonts "
+                        "(e.g. \"Comic Neue Bold\"), a file in the fonts folder, or the path of a font file. "
+                        "On its own it sets the dialogue font (captions then use its italic); STYLE= sets "
+                        "another style: dialogue, captions, shouts, titles or asides. Repeat for several")
+    p.add_argument("--list-fonts", action="store_true", help="list the fonts --font can use, and quit")
     p.add_argument("-f", "--format", choices=["png", "jpg", "webp", "same"], default="png",
                    help="output format (default: png, lossless). 'same' keeps the source format")
     p.add_argument("-r", "--recursive", action="store_true", help="look into sub-folders too")
@@ -113,8 +119,59 @@ def _write_script(path: Path, label: str, blocks) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+STYLE_WORDS = {"dialogue": "dialogue", "speech": "dialogue", "captions": "narration", "caption": "narration",
+               "narration": "narration", "shouts": "shout", "shout": "shout", "titles": "title", "title": "title",
+               "asides": "handwritten", "aside": "handwritten", "handwritten": "handwritten"}
+
+
+def _list_fonts() -> int:
+    from .models import default_fonts_dir
+    from .typeset import ROLE_NAMES, FontCatalog
+    try:
+        sys.stdout.reconfigure(errors="replace")           # font names in any script
+    except (AttributeError, ValueError):
+        pass
+    titles = {"free": "Free comic fonts (downloaded the first time they are used)",
+              "yours": "Your fonts (the fonts folder, and professional comic fonts you installed)",
+              "installed": "Installed on this computer"}
+    entries = FontCatalog(default_fonts_dir()).entries()
+    for group, title in titles.items():
+        items = [e for e in entries if e["group"] == group]
+        if not items:
+            continue
+        print(title + ":")
+        for e in items:
+            tag = ROLE_NAMES.get(e["use"], e["use"]) if e["use"] else "professional comic font" if e["pro"] else ""
+            print(f"  {e['name']:<36} {tag}".rstrip())
+        print()
+    print('Letter with one: --font "Comic Neue Bold", or for another style --font shouts="Luckiest Guy".')
+    return 0
+
+
+def _parse_fonts(items: List[str]) -> Optional[dict]:
+    """--font values -> {style: font id}; None (after saying why) if one is unknown."""
+    from .models import default_fonts_dir
+    from .typeset import ROLE_NAMES, FontCatalog
+    catalog = FontCatalog(default_fonts_dir())
+    fonts = {}
+    for item in items:
+        style, font = "dialogue", item
+        key, sep, rest = item.partition("=")
+        if sep and key.strip().lower() in STYLE_WORDS:
+            style, font = STYLE_WORDS[key.strip().lower()], rest
+        fid = catalog.find(font)
+        if fid is None:
+            print(f"No font called '{font.strip()}'. See --list-fonts for the ones you can use.", file=sys.stderr)
+            return None
+        fonts[style] = fid
+        print(f"Lettering {ROLE_NAMES[style]} in {catalog.name_of(fid)}", flush=True)
+    return fonts
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.list_fonts:
+        return _list_fonts()
     if args.ui or not args.inputs:
         from .server import serve
         return serve(port=args.port, open_browser=not args.no_browser, threads=args.threads,
@@ -128,6 +185,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not jobs:
         print("No images found.", file=sys.stderr)
         return 1
+
+    fonts = None
+    if args.font:
+        if not args.translate:
+            print("--font only matters with --translate (it chooses how the English is lettered).",
+                  file=sys.stderr)
+        fonts = _parse_fonts(args.font)
+        if fonts is None:
+            return 2
 
     cleaner = Cleaner(threads=args.threads, quality=args.quality,
                       settings=MaskSettings(grow=args.grow), inpaint=not args.no_inpaint,
@@ -180,7 +246,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 context.remember(label, page.scene,
                                  [{"japanese": b.text, "english": b.translation}
                                   for b in page.blocks if b.translation.strip()], page.names)
-                result = cleaner.typeset(page, clean)
+                result = cleaner.typeset(page, clean, fonts)
                 lettered = sum(1 for b in page.blocks if b.layout)
                 if args.script:
                     _write_script(dest.parent / (dest.name + ".txt"), label, page.blocks)

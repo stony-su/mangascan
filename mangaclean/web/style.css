@@ -72,6 +72,16 @@ main { display: grid; grid-template-columns: 172px minmax(0, 1fr) 264px; min-hei
 #blockList .step { width: 24px; height: 24px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; cursor: pointer; line-height: 1; }
 #blockList .size { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
 #blockList .skip { margin-left: auto; display: flex; gap: 4px; align-items: center; cursor: pointer; }
+#blockList .fontpick {
+  display: flex; align-items: baseline; gap: 6px; width: 100%; min-width: 0; padding: 4px 8px; text-align: left;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 12px; cursor: pointer;
+}
+#blockList .fontpick:hover { border-color: var(--muted); }
+#blockList .fontpick .fp-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+#blockList .fontpick.custom { border-color: color-mix(in srgb, var(--brand) 60%, var(--line)); }
+#blockList .fontpick .fp-own { margin-left: auto; flex: none; }
+#fontBtn #fontName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#fontBtn small { flex: none; color: var(--muted); font-size: 12px; }
 
 /* ---------------------------------------------------------------- tools */
 .toolgrid { display: grid; gap: 6px; }

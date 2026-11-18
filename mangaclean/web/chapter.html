@@ -72,6 +72,19 @@
         <p class="note" id="translateNote" role="status"></p>
       </section>
 
+      <section class="side-block" aria-labelledby="fontHead">
+        <h2 id="fontHead">Lettering</h2>
+        <button class="font-current" id="fontBtn" type="button" aria-describedby="fontHelp">
+          <span class="font-current-top">
+            <span class="font-current-name"><span id="fontName">Automatic</span><span class="font-auto" id="fontAuto" hidden>Automatic</span></span>
+            <span class="font-current-change">Change</span>
+          </span>
+          <span class="fd-chip"><img id="fontSample" alt="" width="600" height="120"></span>
+        </button>
+        <div class="font-roles" id="fontRoles" role="group" aria-label="Fonts of the other styles"></div>
+        <p class="help" id="fontHelp"></p>
+      </section>
+
       <section class="side-block" aria-labelledby="notesHead">
         <h2 id="notesHead">About this series</h2>
         <label class="sr-only" for="notes">Notes for the translator</label>
@@ -114,6 +127,7 @@
 <input type="file" id="fileInput" multiple hidden accept="image/*,.zip,.cbz,.avif,.jfif">
 <input type="file" id="dirInput" webkitdirectory hidden>
 <script src="/site.js"></script>
+<script src="/fonts.js"></script>
 <script src="/chapter.js"></script>
 </body>
 </html>

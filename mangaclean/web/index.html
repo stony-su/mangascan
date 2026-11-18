@@ -94,6 +94,12 @@
           <textarea id="notes" rows="3" spellcheck="true"
             placeholder="Setting, tone, who is who, name spellings. E.g. a historical war drama; soldiers talk rough, the king speaks formally."></textarea>
         </label>
+        <div class="field col">
+          <span id="fontLabel">Lettering font</span>
+          <button class="btn wide" id="fontBtn" type="button" aria-describedby="fontLabel">
+            <span id="fontName">Automatic</span><small>Change</small>
+          </button>
+        </div>
         <button class="btn primary wide" id="translateBtn" disabled>Translate this page</button>
         <label class="check"><input type="checkbox" id="autoTranslate"> Translate new pages as they are added</label>
         <p class="note bad" id="tnote" hidden></p>
@@ -102,7 +108,7 @@
 
       <h2 id="blockHead" hidden>Text on this page</h2>
       <p class="note" id="blockHint" hidden>Fix a line and press <kbd>Ctrl</kbd> <kbd>Enter</kbd> (or click away) to re-letter it.
-        Lines the reader could not make out are left blank for you to fill in.</p>
+        Lines the reader could not make out are left blank for you to fill in. <i>Font</i> gives one line a font of its own.</p>
       <ol id="blockList"></ol>
     </div>
 
@@ -166,6 +172,7 @@
 <input type="file" id="fileInput" multiple hidden
        accept="image/*,.zip,.cbz,.avif,.jfif">
 <input type="file" id="dirInput" webkitdirectory hidden>
+<script src="/fonts.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

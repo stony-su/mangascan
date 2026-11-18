@@ -21,6 +21,7 @@ const S = {
   view: 'clean',             // clean | original | detected | english
   tab: 'clean',              // clean | translate   (right-hand panel)
   settings: { autoTranslate: false, engine: 'offline', notes: '', engines: {} },
+  chapter: null,             // title, series and fonts of the chapter
   selBlock: null,            // id of the text block being edited
   blocksSig: '',
   tool: 'select',            // select | erase | keep
@@ -68,6 +69,7 @@ async function poll() {
   try {
     const st = await api(`/api/state?chapter=${CHAPTER}`);
     if (st.chapter) {
+      S.chapter = st.chapter;
       document.title = `${st.chapter.title} - Editor - Manga Cleaner`;
       $('crumbChapter').textContent = st.chapter.title;
       $('crumbChapter').href = `/chapter/${CHAPTER}`;
@@ -399,6 +401,9 @@ function updateUI() {
   $('engineNote').classList.toggle('bad', !!problem);
   for (const o of $('engine').options) o.disabled = !!engines[o.value];
   if (document.activeElement !== $('notes')) $('notes').value = S.settings.notes || '';
+  const lettering = S.chapter && S.chapter.lettering;
+  $('fontName').textContent = lettering ? lettering.dialogue.name : 'Automatic';
+  $('fontBtn').disabled = !lettering;
   const scene = p && p.translated && p.scene;
   $('sceneNote').hidden = !scene;
   if (scene) $('sceneNote').textContent = 'How the translator read this page: ' + scene;
@@ -427,11 +432,12 @@ function updateUI() {
 }
 
 let toastTimer = null;
-function toast(msg) {
+function toast(msg, kind) {
   const t = $('toast');
   t.textContent = msg; t.hidden = false;
+  t.className = 'toast' + (kind ? ' ' + kind : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
+  toastTimer = setTimeout(() => { t.hidden = true; }, kind === 'info' ? 4000 : 6000);
 }
 
 const ROLE_NAMES = { '': 'Auto', dialogue: 'Dialogue', shout: 'Shout', title: 'Heavy title', narration: 'Caption (italic)', handwritten: 'Aside (handwritten)' };
@@ -447,7 +453,8 @@ function renderBlocks() {
   const list = $('blockList');
   const p = cur();
   const blocks = (S.detail && p && (p.translated || p.tstate === 'done') && S.detail.blocks) || [];
-  const sig = JSON.stringify([p && p.id, blocks]);
+  const lettering = (S.chapter && S.chapter.lettering) || {};
+  const sig = JSON.stringify([p && p.id, blocks, lettering]);
   if (sig === S.blocksSig) { markSelected(); return; }
   S.blocksSig = sig;
   list.textContent = '';
@@ -463,7 +470,8 @@ function renderBlocks() {
       '<button class="step" data-step="-1" title="Smaller" aria-label="Smaller">&minus;</button>' +
       '<span class="size"></span>' +
       '<button class="step" data-step="1" title="Larger" aria-label="Larger">+</button>' +
-      '<label class="skip"><input type="checkbox"> leave blank</label></div>';
+      '<label class="skip"><input type="checkbox"> leave blank</label></div>' +
+      '<button class="fontpick" type="button"><span>Font</span><span class="fp-v"></span><span class="fp-own"></span></button>';
     li.querySelector('.num').textContent = b.id;
     li.querySelector('.ja').textContent = b.japanese || '\u2014';
     const fl = li.querySelector('.flag');
@@ -491,6 +499,21 @@ function renderBlocks() {
     const skip = li.querySelector('.skip input');
     skip.checked = !b.enabled;
     skip.addEventListener('change', () => editBlock(b.id, { enabled: !skip.checked }));
+    // the font of this line: the chapter's for its style, unless it was given its own
+    const role = b.role || 'dialogue';
+    const chapterFont = lettering[role];
+    const shown = b.fontName || (b.font ? FontPicker.nameOf(b.font) : chapterFont ? chapterFont.name : 'Automatic');
+    const fp = li.querySelector('.fontpick');
+    fp.querySelector('.fp-v').textContent = shown;
+    fp.querySelector('.fp-own').textContent = b.font ? 'this line only' : '';
+    fp.classList.toggle('custom', !!b.font);
+    fp.title = b.font ? 'This line has a font of its own. Click to change it.' : 'Give this line a font of its own';
+    fp.setAttribute('aria-label', `Font of line ${b.id}: ${shown}${b.font ? ', this line only' : ''}. Change`);
+    fp.addEventListener('click', () => FontPicker.open({
+      mode: 'line', line: b.id, role, font: b.font, sample: b.english,
+      autoId: chapterFont ? chapterFont.id : '', autoName: chapterFont ? chapterFont.name : '',
+      onApply: (id) => editBlock(b.id, { font: id }),
+    }));
     li.addEventListener('mousedown', () => selectBlock(b.id, false));
     list.appendChild(li);
   }
@@ -770,6 +793,28 @@ $('translateBtn').onclick = translatePage;
 $('engine').onchange = (e) => saveSettings({ engine: e.target.value });
 $('autoTranslate').onchange = (e) => saveSettings({ autoTranslate: e.target.checked });
 $('notes').addEventListener('change', (e) => saveSettings({ notes: e.target.value, chapter: CHAPTER }));
+$('fontBtn').onclick = () => {
+  if (!S.chapter || !S.chapter.lettering) return;
+  FontPicker.open({
+    mode: 'chapter', role: 'dialogue', choices: S.chapter.fonts || {}, series: S.chapter.series,
+    translated: S.pages.filter((p) => p.translated).length,
+    onApply: async (changes) => {
+      // the page on screen is lettered first, the rest of the chapter after it
+      const res = await api(`/api/chapters/${CHAPTER}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fonts: changes, first: S.current }),
+      });
+      S.chapter = Object.assign({}, S.chapter, { fonts: res.fonts, lettering: res.lettering, fontsVersion: res.fontsVersion });
+      S.blocksSig = '';
+      renderBlocks(); updateUI();
+      toast(res.relettering
+        ? `Lettering ${res.relettering} page${res.relettering === 1 ? '' : 's'} again, this one first. Nothing is translated again.`
+        : `Saved. Pages will be lettered in ${res.lettering.dialogue.name} when they are translated.`, 'info');
+      stateSig = '';
+      poll();
+    },
+  });
+};
 $('toolSeg').onclick = (e) => { const b = e.target.closest('button'); if (b) setTool(b.dataset.tool); };
 $('brush').oninput = (e) => setBrush(+e.target.value);
 $('undoBtn').onclick = () => edit('undo');

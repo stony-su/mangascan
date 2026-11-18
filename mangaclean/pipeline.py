@@ -251,10 +251,11 @@ class Cleaner:
         page.usage = getattr(tr, "last_usage", None)
         page.timings["translate"] = time.perf_counter() - t
 
-    def typeset(self, page: Page, clean_rgb: np.ndarray) -> np.ndarray:
-        """Letter the translations onto the cleaned page."""
+    def typeset(self, page: Page, clean_rgb: np.ndarray, fonts: Optional[Dict[str, str]] = None) -> np.ndarray:
+        """Letter the translations onto the cleaned page, in the fonts picked
+        for the chapter (style -> font id; None letters automatically)."""
         t = time.perf_counter()
-        out = self.typesetter.typeset(page, clean_rgb)
+        out = self.typesetter.typeset(page, clean_rgb, fonts)
         page.timings["typeset"] = time.perf_counter() - t
         return out
 

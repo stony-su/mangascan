@@ -7,13 +7,15 @@ SHA-256.  Licences:
 * LaMa fine-tuned on anime/manga (AnimeMangaInpainting), ONNX by ogkalu  Apache-2.0
 * manga-ocr (kha-white), 2025 retrain by jzhang533, ONNX by l0wgear  Apache-2.0
 * FuguMT ja-en (staka), ONNX export by Kadonox                       CC BY-SA 4.0
-* Balsamiq Sans, Bangers, Anton, Patrick Hand (Google Fonts)          SIL OFL 1.1
+* lettering fonts from Google Fonts                                   SIL OFL 1.1,
+  except Luckiest Guy and Special Elite                               Apache-2.0
 """
 from __future__ import annotations
 
 import hashlib
 import os
 import sys
+import threading
 import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -62,7 +64,8 @@ GROUPS: Dict[str, list] = {
     ],
 }
 
-# Default lettering fonts (all SIL Open Font Licence).  file -> path in google/fonts
+# Free lettering fonts: the defaults and the others the font picker offers.
+# file -> path in google/fonts (ofl/: SIL Open Font Licence, apache/: Apache-2.0)
 FONTS: Dict[str, dict] = {
     "BalsamiqSans-Bold.ttf": _f(
         "BalsamiqSans-Bold.ttf", GF.format(path="ofl/balsamiqsans/BalsamiqSans-Bold.ttf"),
@@ -82,6 +85,24 @@ FONTS: Dict[str, dict] = {
         "a3a0765fc5e8d0b49b540a23aefe0184887dd79f06a0bdf4db7035cea6befa93", 112796),
     "PatrickHand-Regular.ttf": _f("PatrickHand-Regular.ttf", GF.format(path="ofl/patrickhand/PatrickHand-Regular.ttf"),
         "0f173b3e6cb6d1af25babf7f0057c5ac4ee11f9992b0469bb817e967ef4ad0fc", 214772),
+    "Pangolin-Regular.ttf": _f("Pangolin-Regular.ttf", GF.format(path="ofl/pangolin/Pangolin-Regular.ttf"),
+        "cf4f0a46704c7859d4943320fce6c6d06cc7dc450ef971c3676ef36f9f482299", 593408),
+    "Itim-Regular.ttf": _f("Itim-Regular.ttf", GF.format(path="ofl/itim/Itim-Regular.ttf"),
+        "9164d7eb92ca717b53b07193e3445c96782222d24215151b8d2851b576b17645", 371384),
+    "Mali-Bold.ttf": _f("Mali-Bold.ttf", GF.format(path="ofl/mali/Mali-Bold.ttf"),
+        "3e2f421036c3f91eb5ef34650a5cd2116c737a542147769437a9856a455d4462", 112176),
+    "Mali-BoldItalic.ttf": _f("Mali-BoldItalic.ttf", GF.format(path="ofl/mali/Mali-BoldItalic.ttf"),
+        "ed51d1fa721e4dc4a43dba34926442a007f8a300543c1171887810a547e5b23b", 115724),
+    "Kalam-Bold.ttf": _f("Kalam-Bold.ttf", GF.format(path="ofl/kalam/Kalam-Bold.ttf"),
+        "2f6576601db015d4f6c08678120277fc8510b98c06e932ce7a6a9cbff4cbdded", 460896),
+    "LuckiestGuy-Regular.ttf": _f("LuckiestGuy-Regular.ttf", GF.format(path="apache/luckiestguy/LuckiestGuy-Regular.ttf"),
+        "cfbdd68a039f92df51cf3721506af6242e64594c6325fe0bedbeff3fe385d980", 73320),
+    "Creepster-Regular.ttf": _f("Creepster-Regular.ttf", GF.format(path="ofl/creepster/Creepster-Regular.ttf"),
+        "402aeb734586c74aecd3dbdc454589b1fb12e2e1c71f782fd019ae68066d9f44", 62724),
+    "BebasNeue-Regular.ttf": _f("BebasNeue-Regular.ttf", GF.format(path="ofl/bebasneue/BebasNeue-Regular.ttf"),
+        "08e4623805102d819f58601e46e345648846075e363b2ceb23313c2d1c83ec73", 61400),
+    "SpecialElite-Regular.ttf": _f("SpecialElite-Regular.ttf", GF.format(path="apache/specialelite/SpecialElite-Regular.ttf"),
+        "a776fcb4ceb8bdf03e2967688ebdad42680de5b91a7e62c17e718ae212d14bc4", 166180),
 }
 
 # kept for callers that only know the single-file names
@@ -114,11 +135,24 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+_downloads: Dict[str, threading.Lock] = {}
+_downloads_guard = threading.Lock()
+
+
 def fetch(spec: dict, folder: Path, log: Callable[[str], None] = _log_default) -> Path:
     """Return the local path of one registry file, downloading it if needed."""
     path = Path(folder) / spec["file"]
     if path.exists() and path.stat().st_size == spec["size"]:
         return path
+    with _downloads_guard:                 # one download per file, however many ask for it
+        lock = _downloads.setdefault(str(path).lower(), threading.Lock())
+    with lock:
+        if path.exists() and path.stat().st_size == spec["size"]:
+            return path                    # someone else just fetched it
+        return _download(spec, path, log)
+
+
+def _download(spec: dict, path: Path, log: Callable[[str], None]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".part")
     big = spec["size"] > 5_000_000

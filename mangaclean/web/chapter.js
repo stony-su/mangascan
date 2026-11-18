@@ -41,11 +41,14 @@ function render() {
   for (const s of d.seriesList || []) list.append(el('option', { value: s }));
 
   const pages = d.pageList;
+  const busy = (p) => (p.status === 'queued' || p.status === 'working') && p.tstate !== 'working';
   const translating = pages.filter((p) => p.tstate === 'working').length;
-  const cleaning = pages.filter((p) => (p.status === 'queued' || p.status === 'working') && p.tstate !== 'working').length;
+  const lettering = pages.filter((p) => busy(p) && p.job === 'typeset').length;
+  const cleaning = pages.filter((p) => busy(p) && p.job !== 'typeset').length;
   let summary = pages.length ? `${plural(pages.length, 'page')}, ${d.cleaned} cleaned, ${d.translated} in English` : 'No pages yet';
   if (translating) summary += `. Translating, ${plural(translating, 'page')} to go`;
   else if (cleaning) summary += `. Cleaning ${plural(cleaning, 'page')}`;
+  else if (lettering) summary += `. Lettering ${plural(lettering, 'page')} in the new font`;
   $('summary').textContent = summary;
 
   $('siblingNav').hidden = !d.prev && !d.next;
@@ -79,11 +82,62 @@ function renderSide(d) {
     : 'Add this chapter to a series to share notes and name spellings between chapters.';
   if (document.activeElement !== $('notes')) $('notes').value = d.notes || '';
 
+  renderFonts(d);
+
   const fmt = $('fmt').value;
   $('dlEnglish').href = `/api/chapters/${CID}/download.zip?what=english&format=${fmt}`;
   $('dlClean').href = `/api/chapters/${CID}/download.zip?what=clean&format=${fmt}`;
   $('dlEnglish').setAttribute('aria-disabled', d.translated ? 'false' : 'true');
   $('dlClean').setAttribute('aria-disabled', d.cleaned ? 'false' : 'true');
+}
+
+/* The Lettering block: the dialogue font with a sample, and the other styles. */
+function renderFonts(d) {
+  const L = d.lettering;
+  if (!L) return;
+  const main = L.dialogue;
+  $('fontName').textContent = main.name;
+  $('fontAuto').hidden = main.how === 'chosen';
+  $('fontAuto').textContent = main.how === 'pro' ? 'Your pro font' : 'Automatic';
+  const src = FontPicker.previewUrl(main.id, 'dialogue', '', d.fontsVersion);
+  if ($('fontSample').getAttribute('src') !== src) $('fontSample').src = src;
+  $('fontSample').alt = `Sample lettered in ${main.name}`;
+  $('fontBtn').setAttribute('aria-label', `Lettering font: ${main.name}. Change`);
+  const shared = d.series ? `Shared by every chapter of ${d.series}. ` : '';
+  $('fontHelp').textContent = d.translated
+    ? `${shared}Changing it letters the English pages again. Nothing is translated again.`
+    : `${shared}Pick it before you translate, or change it any time later.`;
+  const roles = $('fontRoles');
+  const others = ['narration', 'shout', 'title', 'handwritten'];
+  const key = others.map((r) => L[r].name).join('|');
+  if (roles.dataset.key === key) return;            // unchanged: keep the buttons (and focus)
+  roles.dataset.key = key;
+  roles.textContent = '';
+  for (const r of others) {
+    roles.append(el('button', {
+      class: 'link', type: 'button', title: `Change the font of the ${FontPicker.ROLE_LABEL[r].toLowerCase()}`,
+      onclick: () => chooseFonts(r),
+    }, el('b', { text: FontPicker.ROLE_LABEL[r] }), el('span', { text: L[r].name })));
+  }
+}
+
+function chooseFonts(role) {
+  const d = C.detail;
+  if (!d || !d.lettering) return;
+  FontPicker.open({
+    mode: 'chapter', role, choices: d.fonts || {}, series: d.series, translated: d.translated,
+    onApply: async (changes) => {
+      const res = await postJSON(`/api/chapters/${CID}`, { fonts: changes });
+      C.detail = Object.assign(C.detail, res);
+      C.sig = '';
+      render();
+      const name = res.lettering.dialogue.name;
+      toast(res.relettering
+        ? `Lettering ${plural(res.relettering, 'page')} again. Nothing is translated again.`
+        : `Saved. The chapter will be lettered in ${name} when you translate it.`, 'info');
+      load();
+    },
+  });
 }
 
 /* ----------------------------------------------------------------- pages */
@@ -92,7 +146,9 @@ function pageState(p) {
   if (p.tstate === 'working') {
     return p.status === 'working' ? [p.stage, 'work', ''] : ['Waiting', 'work', 'Waiting to be translated'];
   }
-  if (p.status === 'queued' || p.status === 'working') return [p.status === 'working' ? p.stage : 'Waiting', 'work', ''];
+  if (p.status === 'queued' || p.status === 'working') {
+    return [p.status === 'working' ? p.stage : 'Waiting', 'work', p.job === 'typeset' ? 'Waiting to be lettered in the new font' : ''];
+  }
   if (p.tstate === 'error') return ['Translation failed', 'bad', p.tnote || ''];
   if (p.translated) return ['In English', 'done', ''];
   if (p.cleaned) return ['Cleaned', '', ''];
@@ -275,6 +331,8 @@ $('translateBtn').addEventListener('click', async () => {
   C.sig = '';
   load();
 });
+
+$('fontBtn').addEventListener('click', () => chooseFonts('dialogue'));
 
 $('deleteBtn').addEventListener('click', (e) => {
   const n = C.detail ? C.detail.pages : 0;
